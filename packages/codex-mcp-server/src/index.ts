@@ -18,18 +18,22 @@ const CodexParamsSchema = z.object({
 const TIMEOUT_MS = 600_000; // 10 minutes — agent tasks can take a while
 
 function shellEscape(str: string): string {
-  return '"' + str.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  if (process.platform === "win32") {
+    // Windows cmd.exe: use double quotes, escape internal double quotes
+    return '"' + str.replace(/"/g, '\\"') + '"';
+  }
+  return "'" + str.replace(/'/g, "'\\''") + "'";
 }
 
 function runCodex(prompt: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    let cmd = `codex`;
+    let cmd = `codex exec`;
     if (IS_AGENT_MODE) {
-      cmd += ` --sandbox workspace-write -a never`;
+      cmd += ` --sandbox workspace-write`;
     } else {
-      cmd += ` --sandbox read-only -a never`;
+      cmd += ` --sandbox read-only`;
     }
-    cmd += ` -q ${shellEscape(prompt)}`;
+    cmd += ` ${shellEscape(prompt)}`;
 
     const proc = exec(cmd, {
       timeout: TIMEOUT_MS,
@@ -58,6 +62,9 @@ function runCodex(prompt: string): Promise<string> {
         resolve(stdout.trim());
       }
     });
+
+    // Close stdin so codex doesn't try to read from it
+    proc.stdin?.end();
 
     proc.on("error", (err) => {
       reject(new Error(
