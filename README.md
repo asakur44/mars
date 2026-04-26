@@ -2,7 +2,7 @@
 
 An MCP server that lets Claude Code (or any MCP client) delegate work to other LLMs as subagents — preserving conversation continuity across turns via stable session IDs.
 
-Wraps four backends:
+Wraps five backends:
 
 | Tool | Backend | Auth |
 |---|---|---|
@@ -10,6 +10,7 @@ Wraps four backends:
 | `ask_gemini` | Local [`gemini`](https://geminicli.com) CLI (full agent loop) | `gemini auth` |
 | `ask_openrouter` | OpenRouter HTTPS API (any model) | `OPENROUTER_API_KEY` env |
 | `ask_deepseek` | DeepSeek HTTPS API | `DEEPSEEK_API_KEY` env |
+| `ask_grok` | xAI Grok HTTPS API | `XAI_API_KEY` env |
 
 Plus admin tools: `list_api_sessions`, `delete_api_session`.
 
@@ -32,6 +33,7 @@ ModelMesh turns those LLMs into first-class tools Claude can call mid-conversati
 - For `ask_gemini`: install and authenticate [Gemini CLI](https://geminicli.com) (`npm install -g @google/gemini-cli` then `gemini auth`)
 - For `ask_openrouter`: an [OpenRouter API key](https://openrouter.ai/settings/keys)
 - For `ask_deepseek`: a [DeepSeek API key](https://platform.deepseek.com/api_keys)
+- For `ask_grok`: an [xAI API key](https://console.x.ai/)
 
 ### Install the server
 
@@ -51,12 +53,13 @@ This puts a `modelmesh` console command on your PATH.
 claude mcp add --scope user modelmesh \
   --env OPENROUTER_API_KEY=sk-or-... \
   --env DEEPSEEK_API_KEY=sk-... \
+  --env XAI_API_KEY=xai-... \
   -- modelmesh
 ```
 
 `--scope user` makes it available across all your projects. Drop `--env` flags for any provider you don't have a key for; the corresponding tools will return a clean error when called instead of crashing the server.
 
-In Claude Code, run `/mcp` to confirm `modelmesh` is connected. The six tools should now be callable.
+In Claude Code, run `/mcp` to confirm `modelmesh` is connected. Seven tools should now be callable.
 
 ### Register with other MCP clients
 
@@ -111,6 +114,13 @@ ask_openrouter(prompt="...", model="x-ai/grok-4")
 ask_deepseek(prompt="prove that...", model="deepseek-reasoner")
 ```
 
+`ask_grok` defaults to `grok-4-1-fast` (alias for the current frontier reasoning variant; 2M context). Other choices:
+
+```python
+ask_grok(prompt="...", model="grok-4-1-fast-non-reasoning")  # fast, no reasoning
+ask_grok(prompt="...", model="grok-code-fast-1")              # agentic coding (256K)
+```
+
 ---
 
 ## Telling Claude to use session IDs
@@ -121,7 +131,7 @@ Claude Code won't automatically capture session IDs unless you teach it to. Add 
 ## modelmesh — session_id continuity
 
 The MCP server `modelmesh` exposes `ask_codex`, `ask_gemini`,
-`ask_deepseek`, `ask_openrouter`. Each returns
+`ask_deepseek`, `ask_openrouter`, `ask_grok`. Each returns
 `{"output": str, "session_id": str | None}`.
 
 **Rule:** Treat the returned `session_id` as load-bearing.
@@ -145,6 +155,7 @@ All optional. Set in the `--env` flags when registering, or in your shell enviro
 |---|---|---|
 | `DEEPSEEK_API_KEY` | DeepSeek API key | required for `ask_deepseek` |
 | `OPENROUTER_API_KEY` | OpenRouter API key | required for `ask_openrouter` |
+| `XAI_API_KEY` | xAI Grok API key | required for `ask_grok` |
 | `MODELMESH_DIR` | Where to store API session files | `~/.modelmesh/` |
 | `OPENROUTER_REFERER` | `HTTP-Referer` header sent to OpenRouter (analytics attribution) | omitted |
 | `OPENROUTER_TITLE` | `X-Title` header sent to OpenRouter | omitted |
@@ -185,9 +196,14 @@ History is replayed each call; oldest pairs are trimmed when context approaches 
 - `model`: `"deepseek-chat"` (V3, default) or `"deepseek-reasoner"` (R1)
 - For `deepseek-reasoner`: `reasoning_content` (CoT) is intentionally NOT stored, per DeepSeek's guidance — only the final assistant message goes into history.
 
+### `ask_grok(prompt, model?, system?, max_tokens?, session_id?)`
+
+- `model`: `"grok-4-1-fast"` (default; alias for `grok-4-1-fast-reasoning`, 2M context). Other ids: `"grok-4-1-fast-non-reasoning"`, `"grok-code-fast-1"` (256K coding), `"grok-4"` / `"grok-4-0709"` (older 256K).
+- `session_id`: same shape as the other API tools — None for fresh, a UUID from a previous call to resume.
+
 ### `list_api_sessions(provider?)`
 
-List stored DeepSeek/OpenRouter sessions, newest first. Filter by `"deepseek"` or `"openrouter"`.
+List stored DeepSeek / OpenRouter / Grok sessions, newest first. Filter by `"deepseek"`, `"openrouter"`, or `"grok"`.
 
 ### `delete_api_session(session_id)`
 
@@ -203,8 +219,9 @@ Drop a stored session.
 | Gemini | Gemini's chat files in `~/.gemini/tmp/<user>/chats/` | Hex suffix from filename. Stable as long as file exists. |
 | DeepSeek | `$MODELMESH_DIR/api-sessions/<uuid>.json` | UUID we generate. Atomic JSON writes. |
 | OpenRouter | Same as DeepSeek | Same. |
+| Grok | Same as DeepSeek | Same. |
 
-For DeepSeek/OpenRouter, full message history is replayed on every call (the API itself is stateless). When estimated tokens approach the model's context window, oldest user/assistant pairs are dropped (system messages preserved).
+For DeepSeek/OpenRouter/Grok, full message history is replayed on every call (the API itself is stateless). When estimated tokens approach the model's context window, oldest user/assistant pairs are dropped (system messages preserved).
 
 ---
 
@@ -212,7 +229,7 @@ For DeepSeek/OpenRouter, full message history is replayed on every call (the API
 
 - **No streaming.** Tools return final text only. Codex/Gemini agent loops can take minutes; you won't see partial output.
 - **No image input** for `ask_codex` / `ask_gemini` (CLIs support `-i`; not exposed yet).
-- **DeepSeek/OpenRouter token cost grows linearly per turn** — full history is resent each call. DeepSeek's context caching offsets repeat-prefix cost; OpenRouter pass-through depends on the underlying provider.
+- **DeepSeek/OpenRouter/Grok token cost grows linearly per turn** — full history is resent each call. DeepSeek's context caching offsets repeat-prefix cost; OpenRouter pass-through depends on the underlying provider; xAI's caching policy varies by model.
 - **Gemini IDs are not natively stable.** The CLI resumes by mtime-ordered index; we rebuild stability by scanning the chat dir. If the user clears history, IDs become invalid.
 - **Windows + npm shim quirk:** the server resolves CLI paths via `shutil.which()` and explicitly closes stdin to `DEVNULL` to avoid documented hangs in `codex exec` and `gemini -p` when run as a subprocess.
 

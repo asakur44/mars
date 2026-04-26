@@ -7,29 +7,33 @@
 # ///
 """ModelMesh MCP server.
 
-Exposes four subagent tools to any MCP client (Claude Code, Cursor, etc.):
+Exposes five subagent tools to any MCP client (Claude Code, Cursor, etc.):
   - ask_codex     -> wraps the local `codex` CLI (agentic loop)
   - ask_gemini    -> wraps the local `gemini` CLI (agentic loop)
   - ask_openrouter-> chat completion via OpenRouter (multi-turn supported)
   - ask_deepseek  -> chat completion via DeepSeek API (multi-turn supported)
+  - ask_grok      -> chat completion via xAI Grok API (multi-turn supported)
 
 Plus admin tools:
-  - list_api_sessions  -> enumerate stored DeepSeek/OpenRouter sessions
+  - list_api_sessions  -> enumerate stored DeepSeek/OpenRouter/Grok sessions
   - delete_api_session -> drop a stored session
 
 Codex/Gemini inherit auth from their own CLIs (`codex login`, `gemini auth`).
-OpenRouter/DeepSeek read keys from env: OPENROUTER_API_KEY, DEEPSEEK_API_KEY.
+API tools read keys from env:
+  - OPENROUTER_API_KEY for ask_openrouter
+  - DEEPSEEK_API_KEY   for ask_deepseek
+  - XAI_API_KEY        for ask_grok
 
-All four chat tools return: {"output": str, "session_id": str | None}.
+All five chat tools return: {"output": str, "session_id": str | None}.
 
 Codex / Gemini sessions live where the CLI puts them (codex sqlite,
-gemini chat files). DeepSeek / OpenRouter sessions live in
+gemini chat files). DeepSeek / OpenRouter / Grok sessions live in
 $MODELMESH_DIR/api-sessions/<uuid>.json (default
 ~/.modelmesh/api-sessions/) — full message history, replayed on
 each call.
 
 Optional env vars:
-  MODELMESH_DIR   override session storage root
+  MODELMESH_DIR       override session storage root
   OPENROUTER_REFERER  HTTP-Referer header sent to OpenRouter (analytics)
   OPENROUTER_TITLE    X-Title header sent to OpenRouter (analytics)
 """
@@ -243,7 +247,7 @@ def _require_env(var: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# API session storage (DeepSeek / OpenRouter)
+# API session storage (DeepSeek / OpenRouter / Grok)
 # ---------------------------------------------------------------------------
 
 API_SESSIONS_DIR = (
@@ -256,10 +260,20 @@ API_SESSIONS_DIR = (
 # history when it would push above this. The model's own response budget
 # (max_tokens) sits on top of this, so leave headroom.
 _MODEL_CONTEXT_HINT = {
+    # DeepSeek direct
     "deepseek-chat": 128_000,
     "deepseek-reasoner": 64_000,
+    # OpenRouter ids
     "deepseek/deepseek-v4-pro": 1_000_000,
     "deepseek/deepseek-v4-flash": 1_000_000,
+    # xAI Grok direct
+    "grok-4-1-fast": 2_000_000,
+    "grok-4-1-fast-latest": 2_000_000,
+    "grok-4-1-fast-reasoning": 2_000_000,
+    "grok-4-1-fast-non-reasoning": 2_000_000,
+    "grok-code-fast-1": 256_000,
+    "grok-4": 256_000,
+    "grok-4-0709": 256_000,
 }
 _DEFAULT_CONTEXT_HINT = 100_000  # safe-ish for most OpenRouter models
 
@@ -634,16 +648,67 @@ async def ask_deepseek(
     )
 
 
+@mcp.tool()
+async def ask_grok(
+    prompt: str,
+    model: str = "grok-4-1-fast",
+    system: Optional[str] = None,
+    max_tokens: int = 4096,
+    session_id: Optional[str] = None,
+) -> dict:
+    """Chat completion via the xAI Grok API, with multi-turn sessions.
+
+    Continuity: this tool returns a session_id. To continue the same
+    conversation on a follow-up call, you MUST pass that session_id
+    back. Omitting it starts a fresh chat that has no memory of prior
+    turns. Only start fresh when the work is unrelated.
+
+    Args:
+        prompt: User message.
+        model: xAI model id. Default: "grok-4-1-fast" (alias for the
+            current frontier reasoning variant; 2M context).
+            Other choices:
+              - "grok-4-1-fast-reasoning" — explicit reasoning variant
+              - "grok-4-1-fast-non-reasoning" — fast, no reasoning
+              - "grok-code-fast-1" — agentic coding optimized (256K)
+              - "grok-4" / "grok-4-0709" — older 256K-context model
+            On resume the model is locked to whatever was used
+            originally and this argument is ignored.
+        system: Optional system prompt. Used only on fresh sessions.
+        max_tokens: Cap on response tokens for this turn.
+        session_id: Pass None to start a new session (returns a UUID), or
+            a UUID from a previous call to continue that conversation.
+            History is replayed each call; oldest turns are trimmed when
+            context approaches the model's window.
+
+    Returns:
+        {"output": str, "session_id": str}
+        Stash session_id; pass it back to continue.
+    """
+    api_key = _require_env("XAI_API_KEY")
+    return await _api_chat_with_session(
+        provider="grok",
+        base_url="https://api.x.ai/v1",
+        api_key=api_key,
+        model=model,
+        prompt=prompt,
+        system=system,
+        max_tokens=max_tokens,
+        session_id=session_id,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Session admin tools
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
 async def list_api_sessions(provider: Optional[str] = None) -> list[dict]:
-    """List stored DeepSeek / OpenRouter sessions, newest first.
+    """List stored DeepSeek / OpenRouter / Grok sessions, newest first.
 
     Args:
-        provider: Filter to "deepseek" or "openrouter". None returns both.
+        provider: Filter to "deepseek", "openrouter", or "grok".
+            None returns all.
 
     Returns:
         A list of session metadata dicts:

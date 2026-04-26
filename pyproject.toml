@@ -1,12 +1,12 @@
 [project]
 name = "modelmesh"
 version = "0.1.0"
-description = "MCP server exposing Codex / Gemini / OpenRouter / DeepSeek as subagent tools, with stable session IDs for multi-turn continuity."
+description = "MCP server exposing Codex / Gemini / OpenRouter / DeepSeek / Grok as subagent tools, with stable session IDs for multi-turn continuity."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [{ name = "ModelMesh contributors" }]
-keywords = ["mcp", "claude-code", "subagent", "codex", "gemini", "openrouter", "deepseek", "llm", "modelmesh"]
+keywords = ["mcp", "claude-code", "subagent", "codex", "gemini", "openrouter", "deepseek", "grok", "xai", "llm", "modelmesh"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
