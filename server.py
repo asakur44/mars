@@ -415,16 +415,22 @@ async def ask_codex(
     """
     args = ["codex", "exec"]
     if session_id is not None:
+        # `codex exec resume` does NOT accept -s (sandbox) or -C (cwd):
+        # both are locked to the original session. Pass only what's valid.
         args.append("resume")
         if session_id == "last":
             args.append("--last")
         else:
             args.append(session_id)
-    args.extend(["--skip-git-repo-check", "-s", sandbox])
-    if model:
-        args.extend(["-m", model])
-    if cwd:
-        args.extend(["-C", cwd])
+        args.append("--skip-git-repo-check")
+        if model:
+            args.extend(["-m", model])
+    else:
+        args.extend(["--skip-git-repo-check", "-s", sandbox])
+        if model:
+            args.extend(["-m", model])
+        if cwd:
+            args.extend(["-C", cwd])
     args.append(prompt)
 
     stdout, stderr = await _run_subprocess(args, timeout_sec=timeout_sec)
