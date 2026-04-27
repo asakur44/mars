@@ -616,7 +616,7 @@ async def ask_openrouter(
 @mcp.tool()
 async def ask_deepseek(
     prompt: str,
-    model: str = "deepseek-v4-flash",
+    model: str = "deepseek-v4-pro",
     system: Optional[str] = None,
     max_tokens: int = 4096,
     session_id: Optional[str] = None,
@@ -630,16 +630,26 @@ async def ask_deepseek(
 
     Args:
         prompt: User message.
-        model: "deepseek-v4-flash" (default; V4 fast tier;
-            $0.14/$0.28 per M tokens cache-miss; 1M context) or
-            "deepseek-v4-pro" (V4 advanced reasoning; $0.435/$0.87 per
-            M tokens with 75% discount valid until 2026-05-05; 1M
-            context). Legacy aliases still accepted, deprecated
-            2026-07-24: "deepseek-chat" routes to V4-Flash non-thinking;
-            "deepseek-reasoner" routes to V4-Flash thinking-mode. On
-            resume the model is locked to whatever was used originally.
+        model: DeepSeek model id. Default: "deepseek-v4-pro" (V4
+            advanced reasoning, thinking-mode; $0.435/$0.87 per M tokens
+            with 75% discount valid until 2026-05-05, then ~$1.74/$3.48
+            full price; 1M context).
+            Other choices:
+              - "deepseek-v4-flash" — V4 fast tier; $0.14/$0.28 per M
+                tokens cache-miss; supports both non-thinking and
+                thinking modes; ~3× cheaper now / ~12× cheaper post-
+                discount than V4-Pro; right pick for high-volume work
+              - "deepseek-chat" / "deepseek-reasoner" — legacy aliases
+                routing to V4-Flash non-thinking and thinking-mode
+                respectively; deprecated 2026-07-24
+            On resume the model is locked to whatever was used originally
+            and this argument is ignored.
         system: Optional system prompt. Used only on a fresh session.
-        max_tokens: Cap on response tokens for this turn.
+        max_tokens: Cap on response tokens for this turn. Note: V4-Pro
+            (default) is a thinking-mode model that consumes tokens on
+            internal reasoning before producing visible output; budget
+            generously (≥1024 recommended for non-trivial answers, 4096
+            tool default is fine for most cases).
         session_id: Pass None to start a new session (returns a UUID), or
             a UUID from a previous call to continue that conversation.
             History is replayed each call; oldest turns are trimmed when
