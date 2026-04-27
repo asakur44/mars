@@ -274,6 +274,13 @@ _MODEL_CONTEXT_HINT = {
     "grok-code-fast-1": 256_000,
     "grok-4": 256_000,
     "grok-4-0709": 256_000,
+    # 4.20 family (added 2026-04-27); context hints are conservative
+    # estimates pending xAI docs confirmation — used for history trimming,
+    # so understating is the safe direction.
+    "grok-4.20-reasoning": 256_000,
+    "grok-4.20-0309-reasoning": 256_000,
+    "grok-4.20-0309-non-reasoning": 256_000,
+    "grok-4.20-multi-agent-0309": 256_000,
 }
 _DEFAULT_CONTEXT_HINT = 100_000  # safe-ish for most OpenRouter models
 
@@ -651,7 +658,7 @@ async def ask_deepseek(
 @mcp.tool()
 async def ask_grok(
     prompt: str,
-    model: str = "grok-4-1-fast",
+    model: str = "grok-4.20-reasoning",
     system: Optional[str] = None,
     max_tokens: int = 4096,
     session_id: Optional[str] = None,
@@ -665,10 +672,15 @@ async def ask_grok(
 
     Args:
         prompt: User message.
-        model: xAI model id. Default: "grok-4-1-fast" (alias for the
-            current frontier reasoning variant; 2M context).
+        model: xAI model id. Default: "grok-4.20-reasoning" (xAI
+            flagship "best overall — recommended"; reasoning variant;
+            $2/$6 per M tokens in/out at 2026-04-27).
             Other choices:
-              - "grok-4-1-fast-reasoning" — explicit reasoning variant
+              - "grok-4.20-0309-reasoning" — date-stamped reasoning variant
+              - "grok-4.20-0309-non-reasoning" — faster, lower latency
+              - "grok-4.20-multi-agent-0309" — multi-agent / swarm reasoning
+              - "grok-4-1-fast" / "grok-4-1-fast-reasoning" — 10× cheaper
+                ($0.20/$0.50 per M); 2M context; good for high-volume work
               - "grok-4-1-fast-non-reasoning" — fast, no reasoning
               - "grok-code-fast-1" — agentic coding optimized (256K)
               - "grok-4" / "grok-4-0709" — older 256K-context model
