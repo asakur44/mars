@@ -425,7 +425,7 @@ async def _api_chat_with_session(
 @mcp.tool()
 async def ask_codex(
     prompt: str,
-    model: Optional[str] = None,
+    model: str = "gpt-5.5",
     cwd: Optional[str] = None,
     sandbox: str = "workspace-write",
     timeout_sec: int = 600,
@@ -443,7 +443,12 @@ async def ask_codex(
 
     Args:
         prompt: Task description for Codex.
-        model: Override Codex's default model (e.g. "gpt-5", "o3").
+        model: Codex model id. Default: "gpt-5.5" (OpenAI flagship,
+            pinned in modelmesh 2026-04-30 — was CLI-deferred to
+            whatever `codex` picks). Override per call:
+              - "gpt-5" — prior generation
+              - "o3" — reasoning-specialized
+              - any other model id your Codex CLI auth has access to
         cwd: Working directory for Codex. Defaults to the MCP server's CWD.
         sandbox: One of "read-only", "workspace-write", "danger-full-access".
         timeout_sec: Hard kill after this many seconds. Default 10 minutes.
