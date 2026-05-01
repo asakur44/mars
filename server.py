@@ -50,6 +50,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -422,6 +423,55 @@ async def _api_chat_with_session(
 # Tools
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Codex disk-brief workaround
+# ---------------------------------------------------------------------------
+# Codex CLI fresh sessions reject ~5KB structured prompts with messages like
+# "send the skeleton you want filled in"; ~75% failure rate observed when
+# inlining long structured prompts (3 of 4 fresh sessions either refused,
+# returned empty arrays, or hallucinated a different schema). The pattern
+# that empirically unblocks Codex is: write the brief to a .md file on
+# disk, send Codex a one-liner "read FILE and execute it." We do this
+# automatically when the prompt exceeds CODEX_BRIEF_THRESHOLD chars on a
+# fresh session (resume sessions are locked to original context, no
+# disk-brief). Threshold tunable via CODEX_BRIEF_THRESHOLD env var.
+#
+# The replacement prompt also tells Codex to emit outputs INLINE in its
+# reply rather than try to Write to disk — Codex's sandbox blocks Write
+# even at sandbox=danger-full-access, and modelmesh auto-overflows large
+# tool results to a temp file the caller can read back.
+
+CODEX_BRIEF_THRESHOLD = int(os.environ.get("CODEX_BRIEF_THRESHOLD", "3000"))
+
+
+def _write_codex_brief(prompt: str) -> Path:
+    """Write a long structured prompt to a temp file for Codex to read.
+
+    Returns the absolute path. Caller is responsible for cleanup after
+    Codex returns. The path is in the OS tempdir (not user cwd) so the
+    write doesn't pollute project directories; Codex's sandbox allows
+    arbitrary reads regardless of sandbox mode (workspace-write blocks
+    writes outside cwd, but reads anywhere on disk are permitted).
+    """
+    tmp_dir = Path(tempfile.gettempdir()) / "modelmesh-codex-briefs"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    brief_path = tmp_dir / f"brief-{uuid.uuid4().hex[:12]}.md"
+    brief_path.write_text(prompt, encoding="utf-8")
+    return brief_path
+
+
+def _codex_disk_brief_replacement(brief_path: Path) -> str:
+    """The one-liner Codex receives when we route through a disk brief."""
+    return (
+        f"Read the brief at {brief_path} and execute the task it describes. "
+        "Emit all outputs INLINE in your reply (do not write files to disk; "
+        "the caller will handle persistence). If the brief asks for "
+        "structured output (YAML / JSON / markdown), emit it directly in "
+        "your reply, properly formatted, with no commentary outside the "
+        "structured block unless the brief asks for it."
+    )
+
+
 @mcp.tool()
 async def ask_codex(
     prompt: str,
@@ -462,6 +512,18 @@ async def ask_codex(
         session_id is the UUID Codex used. Stash it; pass it back on the
         next call to keep the same conversation.
     """
+    # Auto disk-brief: long structured prompts on fresh sessions fail
+    # ~75% of the time (Codex rejects with "send the skeleton you want
+    # filled in", returns empty arrays, or hallucinates a different
+    # schema). Workaround that empirically unblocks: write to disk,
+    # send one-liner "read FILE and execute". Resume sessions are locked
+    # to the original prompt context, so disk-brief doesn't apply.
+    brief_path: Optional[Path] = None
+    effective_prompt = prompt
+    if session_id is None and len(prompt) > CODEX_BRIEF_THRESHOLD:
+        brief_path = _write_codex_brief(prompt)
+        effective_prompt = _codex_disk_brief_replacement(brief_path)
+
     args = ["codex", "exec"]
     if session_id is not None:
         # `codex exec resume` does NOT accept -s (sandbox) or -C (cwd):
@@ -480,9 +542,17 @@ async def ask_codex(
             args.extend(["-m", model])
         if cwd:
             args.extend(["-C", cwd])
-    args.append(prompt)
+    args.append(effective_prompt)
 
-    stdout, stderr = await _run_subprocess(args, timeout_sec=timeout_sec)
+    try:
+        stdout, stderr = await _run_subprocess(args, timeout_sec=timeout_sec)
+    finally:
+        # Best-effort cleanup of the brief file regardless of success/error.
+        if brief_path is not None:
+            try:
+                brief_path.unlink()
+            except OSError:
+                pass
 
     resolved_id = _extract_codex_session_id(stdout, stderr)
     # If user passed an explicit UUID and we couldn't extract one, keep theirs.
