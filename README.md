@@ -173,6 +173,46 @@ The MCP server `modelmesh` exposes `ask_codex`, `ask_gemini`,
 
 This loads in every Claude Code session in every project.
 
+### (optional) Orchestration discipline for sub-agent loops
+
+If you use Claude (or any other agent) to spawn sub-agents that themselves call modelmesh — parallel fan-out, structured-data extraction, multi-vendor critique passes — add this second snippet alongside the session-id one. It encodes the failure modes that modelmesh can't engineer around (provider-side gateway limits, parent-agent dispatch hygiene, late-write recovery):
+
+```markdown
+## modelmesh — orchestration discipline
+
+When spawning sub-agents that call modelmesh, apply these to avoid
+silent failures:
+
+**Pick the model for the shape of work:**
+- Bulk fan-out (single call >10K output): `ask_grok` —
+  `grok-4.20-reasoning` empirically holds long single-call output;
+  xAI is the only gateway that reliably delivers it.
+- Per-section structured outputs (small per-table calls):
+  `ask_zai` / `ask_deepseek` / `ask_gemini` are fine. For GLM-5.1
+  specifically, fragment large work into 5–10 per-table calls —
+  Z.AI gateway truncates or 504s on bulk requests >~16K output.
+- Heavy agentic work in a repo: `ask_codex` (modelmesh handles the
+  disk-brief workaround for long structured prompts automatically).
+
+**Dispatch hygiene:**
+- **Never describe planned tool calls in prose.** Emit `tool_use`
+  blocks directly. If you find yourself writing "dispatching X" or
+  "calling Y", stop and emit the actual calls.
+- After spawning a child agent that should make N calls, count
+  `tool_use` blocks in its transcript. If <N, the agent silently
+  no-op'd — re-prompt explicitly with the count assertion.
+- For parallel fan-out, 1–2 modelmesh calls per child agent.
+  Multiple sequential calls within one child compound watchdog risk
+  (heartbeats every 30s help, but the cumulative window adds up).
+
+**When a child appears killed mid-call:**
+- Check the expected output file 5–10 minutes after the kill before
+  discarding the work. Thinking-mode calls (V4-Pro, GLM-5.1,
+  Grok-4.20-reasoning) often complete and write to disk *after* the
+  parent watchdog timestamp. Re-read the file and recover the
+  artifact rather than retrying.
+```
+
 ---
 
 ## Configuration
@@ -294,6 +334,24 @@ The inline-emit instruction also closes a related Codex sandbox quirk: even at `
 ### Inner timeout bumped from 180s → 900s
 
 Heartbeats keep the parent watchdog alive but don't help if the inner httpx call itself times out at 3 minutes before the model finishes. `_openai_compatible_chat`'s default `timeout_sec` is now `900` (15 min) — fits the typical 5–15 min thinking-mode envelope.
+
+### Per-model output budget
+
+Beyond watchdog and timeout, each provider has its own *output ceiling* — a practical limit on visible tokens per single call beyond which the gateway truncates, returns 504, or silently drops content. These ceilings shift with provider load and aren't always stable, so modelmesh doesn't enforce them; instead they live as discoverable hints in `_MODEL_PRACTICAL_OUTPUT_CEILING` (in `server.py`).
+
+Empirically observed:
+
+| Model | Practical output ceiling | Bulk fan-out (single call >10K output) |
+|---|---|---|
+| `grok-4.20-reasoning` (and the 4.20 family) | ~60K | **✓ Holds.** xAI gateway is the only one that reliably delivers long single-call output. |
+| `grok-4-1-fast-reasoning` | ~60K | ✓ Holds. |
+| `deepseek-v4-flash` | ~64K | ✓ Generally holds (non-thinking). |
+| `deepseek-v4-pro` | ~32K | △ Thinking-mode reserves significant budget for internal reasoning; bulk above ~32K can degrade. |
+| `moonshotai/kimi-k2.6` | ~32K | △ Treat conservatively — bulk-fanout limit unverified beyond small calls. |
+| `gemini-3.1-pro-preview` | ~32K | △ Treat conservatively pending evidence. |
+| `glm-5.1` (and the GLM family) | **~16K** | **✗ Fails.** Z.AI gateway truncates / 504s on bulk-output requests. Empirical pattern that works on GLM: per-table fragmentation (5–10 per-section calls of ~4K output each), assembled client-side. |
+
+**The verdict that follows from this:** for bulk fan-out work — single call producing >10K output — route through `ask_grok` with `grok-4.20-reasoning`. For per-section work where each call produces ~4K output and the caller assembles the result, `ask_zai` / `ask_deepseek` / `ask_gemini` are all fine. Don't try to drop GLM-5.1 in as a Grok substitute on bulk-fanout requests; the gateway-side ceiling will silently fail you.
 
 ### Patterns that still require caller discipline
 

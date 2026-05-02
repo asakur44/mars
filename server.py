@@ -388,6 +388,70 @@ _MODEL_CONTEXT_HINT = {
 _DEFAULT_CONTEXT_HINT = 100_000  # safe-ish for most OpenRouter models
 
 
+# Per-model practical output ceilings — empirically observed maximums
+# beyond which the provider gateway returns 504 / truncates / silently
+# drops content, even when the model's *context window* and the
+# tool-level max_tokens both nominally allow more. NOT enforced by
+# modelmesh (the limits shift with provider load and aren't always
+# stable enough to encode as hard caps); just discoverable in code so
+# callers planning bulk-fanout work see the number alongside the
+# context window.
+#
+# Rule of thumb: bulk fan-out (single call >10K visible output) is
+# only reliable on grok-4.20-reasoning (xAI gateway holds). Other
+# thinking-mode models — V4-Pro, GLM-5.1, Kimi K2.6, Gemini 3.1 Pro
+# Preview — should be used in per-table / per-section fragmentation
+# (5–10 small calls, each <16K output) for large work.
+#
+# Empirical sources for each value live in the inline comments below
+# and in `wiki/patterns/subagent-orchestration.md` § "Per-model
+# output budgets".
+
+_MODEL_PRACTICAL_OUTPUT_CEILING = {
+    # Z.AI / Zhipu — observed 504s and silent truncation on 60K-output
+    # bulk-fanout requests; 4K-output per-table calls work clean.
+    # Conservative ceiling to bias callers toward fragmentation.
+    "glm-5.1": 16_000,
+    "glm-5": 16_000,
+    "glm-5-turbo": 16_000,
+    "glm-5v-turbo": 16_000,
+    "glm-4.7": 16_000,
+    "glm-4.7-flash": 16_000,
+    "glm-4.6": 16_000,
+    "glm-4.5": 16_000,
+    # DeepSeek V4 — thinking-mode V4-Pro tolerates moderate outputs
+    # but reasoning_content allocation eats budget; fragment beyond
+    # ~32K output. V4-Flash is non-thinking, more headroom.
+    "deepseek-v4-pro": 32_000,
+    "deepseek-v4-flash": 64_000,
+    "deepseek-chat": 64_000,         # V3 legacy alias → V4-Flash
+    "deepseek-reasoner": 32_000,     # V3 legacy alias → V4-Pro thinking
+    # xAI Grok — flagship reasoning empirically holds bulk-fanout
+    # cleanly (5–15 min calls observed clean per chairman's runs).
+    # Cheaper variants are similar shape but smaller context.
+    "grok-4.20-reasoning": 60_000,
+    "grok-4.20-0309-reasoning": 60_000,
+    "grok-4.20-0309-non-reasoning": 60_000,
+    "grok-4.20-multi-agent-0309": 60_000,
+    "grok-4-1-fast-reasoning": 60_000,
+    "grok-4-1-fast": 60_000,
+    "grok-4-1-fast-non-reasoning": 60_000,
+    "grok-code-fast-1": 32_000,
+    "grok-4": 32_000,
+    "grok-4-0709": 32_000,
+    # Moonshot Kimi via OpenRouter — thinking-mode; treat conservatively
+    # pending bulk-fanout evidence (we've only verified small calls
+    # work cleanly).
+    "moonshotai/kimi-k2.6": 32_000,
+    "moonshotai/kimi-k2.5": 32_000,
+    "moonshotai/kimi-latest": 32_000,
+    # OpenRouter passthrough for DeepSeek — same as direct.
+    "deepseek/deepseek-v4-pro": 32_000,
+    "deepseek/deepseek-v4-flash": 64_000,
+}
+_DEFAULT_PRACTICAL_OUTPUT_CEILING = 16_000  # conservative when unknown
+
+
 def _estimate_tokens(messages: list[dict]) -> int:
     chars = sum(len(m.get("content") or "") for m in messages)
     return chars // 4 + len(messages) * 4  # ~4 token overhead per message
@@ -702,6 +766,13 @@ async def ask_gemini(
     Note: Gemini's CLI resumes by mtime-ordered index, not by stable id.
     The stability of session_id therefore depends on the chat file
     surviving on disk; if the user clears chat history, ids become invalid.
+
+    Practical output budget: Gemini 3.1 Pro Preview is thinking-mode;
+    bulk single-call outputs above ~32K visible tokens are unverified.
+    For large structured work, prefer per-section fragmentation. Bulk
+    fan-out (single-call >10K output) lands more reliably on ask_grok
+    with grok-4.20-reasoning until Gemini's bulk-output ceiling is
+    empirically pinned down.
     """
     if approval_mode == "default":
         raise RuntimeError(
@@ -878,6 +949,14 @@ async def ask_deepseek(
     Returns:
         {"output": str, "session_id": str}
         Stash session_id; pass it back to continue.
+
+    Practical output budget: V4-Pro is thinking-mode and reserves
+    significant tokens for internal reasoning before visible output.
+    Bulk single-call output above ~32K visible tokens can degrade
+    quality or get truncated; for large structured work, fragment
+    into per-section calls. V4-Flash (non-thinking) holds longer
+    output more reliably. For very long single-call output, prefer
+    ask_grok with grok-4.20-reasoning.
     """
     api_key = _require_env("DEEPSEEK_API_KEY")
     return await _api_chat_with_session(
@@ -1039,6 +1118,15 @@ async def ask_zai(
     (32-char hex + dot + 17-char alphanum). The tool generates a fresh
     JWT per call (HS256-signed with the secret half) before sending; raw
     Bearer auth with the unsigned key fails on the paas/v4 endpoint.
+
+    Practical output budget: Z.AI's gateway empirically truncates or
+    returns 504 on bulk-output requests above ~16K visible output
+    tokens. Per-table calls of ~4K output land cleanly. For large
+    structured outputs (YAML / JSON >16K), fragment into 5–10 small
+    per-section calls rather than one bulk-fanout request — the
+    fragmented pattern is what empirically works on GLM. For bulk
+    fan-out (single-call output >10K), prefer ask_grok with
+    grok-4.20-reasoning, which holds long single-call output reliably.
     """
     api_key = _require_env("ZAI_API_KEY")
     jwt_token = _zai_jwt_token(api_key)
