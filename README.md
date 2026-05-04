@@ -1,6 +1,8 @@
-# ModelMesh
+# MARS
 
-An MCP server that lets Claude Code (or any MCP client) delegate work to other LLMs as subagents — preserving conversation continuity across turns via stable session IDs.
+**Model Adapter & Routing System.** An MCP server that lets Claude Code (or any MCP client) delegate work to other LLMs as subagents — preserving conversation continuity across turns via stable session IDs. Part of the Fr4ym + MARS + BCKS stack.
+
+> **Renamed from ModelMesh on 2026-05-04.** The legacy `modelmesh` console command, `MODELMESH_*` env vars, and `~/.modelmesh/` storage path continue to work with a `DeprecationWarning` through MARS v0.2.0. See [CHANGELOG.md](./CHANGELOG.md) for the full migration path.
 
 Wraps six backends:
 
@@ -21,7 +23,7 @@ Plus admin tools: `list_api_sessions`, `delete_api_session`.
 
 Claude Code is great, but sometimes you want a second opinion from GPT-5.5, or to delegate a long task to Gemini's 1M-context model, or to run cheap reasoning on DeepSeek-V4-Flash, or to triangulate against Z.AI's GLM-5.1. Doing this by hand — switching tools, copy-pasting context, losing thread — is friction.
 
-ModelMesh turns those LLMs into first-class tools Claude can call mid-conversation. Each call returns a `session_id` you can pass back on the next call to keep the conversation going. Codex/Gemini sessions persist in their own native stores; DeepSeek/OpenRouter/Grok/Z.AI conversations are kept in a local JSON store and replayed on each call.
+MARS turns those LLMs into first-class tools Claude can call mid-conversation. Each call returns a `session_id` you can pass back on the next call to keep the conversation going. Codex/Gemini sessions persist in their own native stores; DeepSeek/OpenRouter/Grok/Z.AI conversations are kept in a local JSON store and replayed on each call.
 
 ---
 
@@ -40,33 +42,33 @@ ModelMesh turns those LLMs into first-class tools Claude can call mid-conversati
 ### Install the server
 
 ```bash
-git clone https://github.com/asakur44/ModelMesh.git
-cd ModelMesh
+git clone https://github.com/asakur44/mars.git
+cd mars
 pip install .
 ```
 
-This puts a `modelmesh` console command on your PATH.
+This puts a `mars` console command on your PATH. (The legacy `modelmesh` console command is also installed for backwards compatibility through MARS v0.2.0.)
 
 (Alternative: if you have [`uv`](https://docs.astral.sh/uv/) installed, you can skip `pip install` and use `uv run server.py` — the inline PEP 723 metadata handles deps including `pyjwt>=2.0.0` for `ask_zai`.)
 
 ### Register with Claude Code
 
 ```bash
-claude mcp add --scope user modelmesh \
+claude mcp add --scope user mars \
   --env OPENROUTER_API_KEY=sk-or-... \
   --env DEEPSEEK_API_KEY=sk-... \
   --env XAI_API_KEY=xai-... \
   --env ZAI_API_KEY=<key_id>.<secret> \
-  -- modelmesh
+  -- mars
 ```
 
 `--scope user` makes it available across all your projects. Drop `--env` flags for any provider you don't have a key for; the corresponding tools will return a clean error when called instead of crashing the server.
 
-In Claude Code, run `/mcp` to confirm `modelmesh` is connected. Eight tools should now be callable (six chat subagents + two admin tools).
+In Claude Code, run `/mcp` to confirm `mars` is connected. Eight tools should now be callable (six chat subagents + two admin tools).
 
 ### Register with other MCP clients
 
-Cursor, Windsurf, VS Code MCP, etc. all accept stdio MCP servers. Point them at the `modelmesh` command with the same env vars.
+Cursor, Windsurf, VS Code MCP, etc. all accept stdio MCP servers. Point them at the `mars` command with the same env vars.
 
 ---
 
@@ -156,9 +158,9 @@ ask_codex(prompt="...", model="o3")
 Claude Code won't automatically capture session IDs unless you teach it to. Add this to your global `~/.claude/CLAUDE.md` (creates if missing):
 
 ```markdown
-## modelmesh — session_id continuity
+## mars — session_id continuity
 
-The MCP server `modelmesh` exposes `ask_codex`, `ask_gemini`,
+The MCP server `mars` exposes `ask_codex`, `ask_gemini`,
 `ask_deepseek`, `ask_openrouter`, `ask_grok`, `ask_zai`. Each returns
 `{"output": str, "session_id": str | None}`.
 
@@ -175,12 +177,12 @@ This loads in every Claude Code session in every project.
 
 ### (optional) Orchestration discipline for sub-agent loops
 
-If you use Claude (or any other agent) to spawn sub-agents that themselves call modelmesh — parallel fan-out, structured-data extraction, multi-vendor critique passes — add this second snippet alongside the session-id one. It encodes the failure modes that modelmesh can't engineer around (provider-side gateway limits, parent-agent dispatch hygiene, late-write recovery):
+If you use Claude (or any other agent) to spawn sub-agents that themselves call MARS — parallel fan-out, structured-data extraction, multi-vendor critique passes — add this second snippet alongside the session-id one. It encodes the failure modes that MARS can't engineer around (provider-side gateway limits, parent-agent dispatch hygiene, late-write recovery):
 
 ```markdown
-## modelmesh — orchestration discipline
+## mars — orchestration discipline
 
-When spawning sub-agents that call modelmesh, apply these to avoid
+When spawning sub-agents that call MARS, apply these to avoid
 silent failures:
 
 **Pick the model for the shape of work:**
@@ -191,7 +193,7 @@ silent failures:
   `ask_zai` / `ask_deepseek` / `ask_gemini` are fine. For GLM-5.1
   specifically, fragment large work into 5–10 per-table calls —
   Z.AI gateway truncates or 504s on bulk requests >~16K output.
-- Heavy agentic work in a repo: `ask_codex` (modelmesh handles the
+- Heavy agentic work in a repo: `ask_codex` (MARS handles the
   disk-brief workaround for long structured prompts automatically).
 
 **Dispatch hygiene:**
@@ -201,7 +203,7 @@ silent failures:
 - After spawning a child agent that should make N calls, count
   `tool_use` blocks in its transcript. If <N, the agent silently
   no-op'd — re-prompt explicitly with the count assertion.
-- For parallel fan-out, 1–2 modelmesh calls per child agent.
+- For parallel fan-out, 1–2 MARS calls per child agent.
   Multiple sequential calls within one child compound watchdog risk
   (heartbeats every 30s help, but the cumulative window adds up).
 
@@ -225,9 +227,12 @@ All optional. Set in the `--env` flags when registering, or in your shell enviro
 | `OPENROUTER_API_KEY` | OpenRouter API key | required for `ask_openrouter` |
 | `XAI_API_KEY` | xAI Grok API key | required for `ask_grok` |
 | `ZAI_API_KEY` | Z.AI (Zhipu) API key in legacy `id.secret` format — tool generates JWT internally | required for `ask_zai` |
-| `MODELMESH_DIR` | Where to store API session files | `~/.modelmesh/` |
+| `MARS_DIR` | Where to store API session files | `~/.mars/` |
+| `MARS_HEARTBEAT_INTERVAL_SEC` | Progress-heartbeat interval (seconds) | `30` |
 | `OPENROUTER_REFERER` | `HTTP-Referer` header sent to OpenRouter (analytics attribution) | omitted |
 | `OPENROUTER_TITLE` | `X-Title` header sent to OpenRouter | omitted |
+
+**Legacy env vars** (deprecated, removed in MARS v0.2.0): `MODELMESH_DIR` and `MODELMESH_HEARTBEAT_INTERVAL_SEC` are still read if the new names are unset, with a `DeprecationWarning`. Existing storage at `~/.modelmesh/` is also auto-detected and used as a fallback if `~/.mars/` doesn't exist yet — same warning. Migrate with `mv ~/.modelmesh ~/.mars` to silence.
 
 ---
 
@@ -299,7 +304,7 @@ Drop a stored session.
 |---|---|---|
 | Codex | Codex's own SQLite + rollout JSONL in `~/.codex/` | Stable UUIDs. Pass back to resume. |
 | Gemini | Gemini's chat files in `~/.gemini/tmp/<user>/chats/` | Hex suffix from filename. Stable as long as file exists. |
-| DeepSeek | `$MODELMESH_DIR/api-sessions/<uuid>.json` | UUID we generate. Atomic JSON writes. |
+| DeepSeek | `$MARS_DIR/api-sessions/<uuid>.json` | UUID we generate. Atomic JSON writes. |
 | OpenRouter | Same as DeepSeek | Same. |
 | Grok | Same as DeepSeek | Same. |
 | Z.AI | Same as DeepSeek | Same. JWT is regenerated per call (1-hour exp); session_id only tracks message history. |
@@ -310,22 +315,22 @@ For DeepSeek/OpenRouter/Grok/Z.AI, full message history is replayed on every cal
 
 ## Calling from a sub-agent loop
 
-Spawning a child agent (Claude sub-agent, CI runner, automated orchestrator) that itself calls modelmesh introduces a supervisor-vs-thinking-model timing trap: parent agents kill children that go silent for ~600s, but thinking-mode reasoning models (DeepSeek V4-Pro, Grok 4.20-reasoning, Kimi K2.6, GLM-5.1, Gemini 3.1 Pro Preview) routinely take 5–15 minutes per call. The parent sees silence, kills the child, and the underlying call eventually completes anyway — to no one.
+Spawning a child agent (Claude sub-agent, CI runner, automated orchestrator) that itself calls MARS introduces a supervisor-vs-thinking-model timing trap: parent agents kill children that go silent for ~600s, but thinking-mode reasoning models (DeepSeek V4-Pro, Grok 4.20-reasoning, Kimi K2.6, GLM-5.1, Gemini 3.1 Pro Preview) routinely take 5–15 minutes per call. The parent sees silence, kills the child, and the underlying call eventually completes anyway — to no one.
 
-modelmesh handles this with three engineered fixes shipped in v0.1.2 (commits [`e1301f0`](https://github.com/asakur44/ModelMesh/commit/e1301f0) and [`794ca01`](https://github.com/asakur44/ModelMesh/commit/794ca01)):
+MARS handles this with three engineered fixes shipped in v0.1.2 (commits [`e1301f0`](https://github.com/asakur44/mars/commit/e1301f0) and [`794ca01`](https://github.com/asakur44/mars/commit/794ca01)):
 
 ### Progress heartbeats (automatic when called via MCP)
 
 Every chat tool now accepts `ctx: Optional[Context] = None`. FastMCP injects `Context` automatically when the tool is invoked over MCP; while the slow API/CLI call awaits, a background task emits MCP progress notifications every 30s with messages like `"deepseek/deepseek-v4-pro: thinking... (60s elapsed)"`. Parent watchdogs that count progress notifications as liveness see ~20 pings over a 10-minute call instead of one silent block.
 
-Tunable via `MODELMESH_HEARTBEAT_INTERVAL_SEC` env var (default `30`). No-op when called from non-MCP code paths (no `ctx` available).
+Tunable via `MARS_HEARTBEAT_INTERVAL_SEC` env var (default `30`). No-op when called from non-MCP code paths (no `ctx` available).
 
 ### Auto disk-brief for Codex (closes ~75% rejection on long structured prompts)
 
 Codex CLI fresh sessions empirically reject ~5KB structured prompts ~75% of the time — Codex returns "send the skeleton you want filled in", returns `[]`, or hallucinates a different schema. The pattern that empirically unblocks Codex is: write the brief to a file, send Codex a one-liner "read FILE and execute". `ask_codex` now does this automatically:
 
 - Triggers when `len(prompt) > CODEX_BRIEF_THRESHOLD` (default `3000`; env-tunable) AND `session_id is None`
-- Writes the prompt to `<tempdir>/modelmesh-codex-briefs/brief-<uuid>.md`
+- Writes the prompt to `<tempdir>/mars-codex-briefs/brief-<uuid>.md`
 - Replaces the prompt with: *"Read PATH and execute. Emit outputs INLINE (do not write files; caller will persist)."*
 - Cleans up the brief file after Codex returns (best-effort)
 
@@ -337,7 +342,7 @@ Heartbeats keep the parent watchdog alive but don't help if the inner httpx call
 
 ### Per-model output budget
 
-Beyond watchdog and timeout, each provider has its own *output ceiling* — a practical limit on visible tokens per single call beyond which the gateway truncates, returns 504, or silently drops content. These ceilings shift with provider load and aren't always stable, so modelmesh doesn't enforce them; instead they live as discoverable hints in `_MODEL_PRACTICAL_OUTPUT_CEILING` (in `server.py`).
+Beyond watchdog and timeout, each provider has its own *output ceiling* — a practical limit on visible tokens per single call beyond which the gateway truncates, returns 504, or silently drops content. These ceilings shift with provider load and aren't always stable, so MARS doesn't enforce them; instead they live as discoverable hints in `_MODEL_PRACTICAL_OUTPUT_CEILING` (in `server.py`).
 
 Empirically observed:
 
@@ -357,7 +362,7 @@ Empirically observed:
 
 Even with the engineered fixes, four orchestration patterns remain caller-side:
 
-- **Smaller agents.** For parallel fan-out, prefer 1–2 modelmesh calls per child agent. Multiple sequential calls within one child compound the watchdog risk.
+- **Smaller agents.** For parallel fan-out, prefer 1–2 MARS calls per child agent. Multiple sequential calls within one child compound the watchdog risk.
 - **Inner timeout < parent watchdog.** If the parent's watchdog is 600s, set `ask_*(timeout_sec=400)` so inner failures are cleanly recoverable.
 - **Main-thread fallback.** Anticipating a stall? Fire `ask_*` directly from the parent rather than through a child sub-agent. Costs context budget, eliminates supervisor-kill.
 - **Late-write recovery.** If a child gets killed mid-call, check the expected output file 5–10 minutes later before discarding the work as failed — the underlying call may have completed and written the file after the kill.

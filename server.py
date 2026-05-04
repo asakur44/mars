@@ -6,7 +6,11 @@
 #   "pyjwt>=2.0.0",
 # ]
 # ///
-"""ModelMesh MCP server.
+"""MARS — Model Adapter & Routing System (MCP server).
+
+(Project was previously named ModelMesh; renamed 2026-05-04. The legacy
+`modelmesh` console command and `MODELMESH_*` env vars continue to work
+with a DeprecationWarning until MARS v0.2.0 — see CHANGELOG.)
 
 Exposes six subagent tools to any MCP client (Claude Code, Cursor, etc.):
   - ask_codex     -> wraps the local `codex` CLI (agentic loop)
@@ -32,14 +36,20 @@ All six chat tools return: {"output": str, "session_id": str | None}.
 
 Codex / Gemini sessions live where the CLI puts them (codex sqlite,
 gemini chat files). DeepSeek / OpenRouter / Grok / z.ai sessions live in
-$MODELMESH_DIR/api-sessions/<uuid>.json (default
-~/.modelmesh/api-sessions/) — full message history, replayed on
-each call.
+$MARS_DIR/api-sessions/<uuid>.json (default ~/.mars/api-sessions/, with
+~/.modelmesh/ as a deprecated fallback if it already exists) — full
+message history, replayed on each call.
 
 Optional env vars:
-  MODELMESH_DIR       override session storage root
-  OPENROUTER_REFERER  HTTP-Referer header sent to OpenRouter (analytics)
-  OPENROUTER_TITLE    X-Title header sent to OpenRouter (analytics)
+  MARS_DIR                       override session storage root
+                                 (legacy MODELMESH_DIR also accepted)
+  MARS_HEARTBEAT_INTERVAL_SEC    progress-heartbeat interval (default 30)
+                                 (legacy MODELMESH_HEARTBEAT_INTERVAL_SEC
+                                 also accepted)
+  OPENROUTER_REFERER             HTTP-Referer header sent to OpenRouter
+                                 (analytics)
+  OPENROUTER_TITLE               X-Title header sent to OpenRouter
+                                 (analytics)
 """
 
 from __future__ import annotations
@@ -54,6 +64,7 @@ import sys
 import tempfile
 import time
 import uuid
+import warnings
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
@@ -61,7 +72,7 @@ import httpx
 import jwt
 from mcp.server.fastmcp import Context, FastMCP
 
-mcp = FastMCP("modelmesh")
+mcp = FastMCP("mars")
 
 
 # ---------------------------------------------------------------------------
@@ -262,9 +273,26 @@ async def _openai_compatible_chat(
 # No-op when ctx is None (e.g. test harnesses that import the helpers
 # directly without going through MCP).
 
-HEARTBEAT_INTERVAL_SEC = float(
-    os.environ.get("MODELMESH_HEARTBEAT_INTERVAL_SEC", "30")
-)
+def _get_heartbeat_interval_sec() -> float:
+    """Read heartbeat interval from env, preferring MARS_HEARTBEAT_INTERVAL_SEC.
+    Falls back to legacy MODELMESH_HEARTBEAT_INTERVAL_SEC with a
+    DeprecationWarning. Default 30s.
+    """
+    if v := os.environ.get("MARS_HEARTBEAT_INTERVAL_SEC"):
+        return float(v)
+    if v := os.environ.get("MODELMESH_HEARTBEAT_INTERVAL_SEC"):
+        warnings.warn(
+            "MODELMESH_HEARTBEAT_INTERVAL_SEC is deprecated; use "
+            "MARS_HEARTBEAT_INTERVAL_SEC instead. Legacy support will be "
+            "removed in MARS v0.2.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return float(v)
+    return 30.0
+
+
+HEARTBEAT_INTERVAL_SEC = _get_heartbeat_interval_sec()
 
 
 @contextlib.asynccontextmanager
@@ -335,11 +363,44 @@ def _require_env(var: str) -> str:
 # API session storage (DeepSeek / OpenRouter / Grok)
 # ---------------------------------------------------------------------------
 
-API_SESSIONS_DIR = (
-    Path(os.environ["MODELMESH_DIR"])
-    if os.environ.get("MODELMESH_DIR")
-    else Path.home() / ".modelmesh"
-) / "api-sessions"
+def _get_mars_dir() -> Path:
+    """Resolve MARS storage root, preferring new names and falling back
+    to legacy ones with a DeprecationWarning so existing users keep
+    their sessions until they migrate.
+
+    Resolution order:
+      1. MARS_DIR env var (new)
+      2. MODELMESH_DIR env var (deprecated; emits DeprecationWarning)
+      3. ~/.mars/ if it exists (new default)
+      4. ~/.modelmesh/ if it exists (deprecated; emits DeprecationWarning)
+      5. ~/.mars/ (new default, will be created by callers)
+    """
+    if path := os.environ.get("MARS_DIR"):
+        return Path(path)
+    if path := os.environ.get("MODELMESH_DIR"):
+        warnings.warn(
+            "MODELMESH_DIR is deprecated; use MARS_DIR instead. "
+            "Legacy support will be removed in MARS v0.2.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return Path(path)
+    new = Path.home() / ".mars"
+    old = Path.home() / ".modelmesh"
+    if not new.exists() and old.exists():
+        warnings.warn(
+            f"Found existing storage at {old}; this is the deprecated "
+            f"~/.modelmesh location. Move it to {new} or set "
+            f"MARS_DIR={old} to silence this warning. Legacy fallback "
+            f"will be removed in MARS v0.2.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return old
+    return new
+
+
+API_SESSIONS_DIR = _get_mars_dir() / "api-sessions"
 
 # Per-model context window guards. ~4 chars/token rough estimate. We trim
 # history when it would push above this. The model's own response budget
@@ -392,7 +453,7 @@ _DEFAULT_CONTEXT_HINT = 100_000  # safe-ish for most OpenRouter models
 # beyond which the provider gateway returns 504 / truncates / silently
 # drops content, even when the model's *context window* and the
 # tool-level max_tokens both nominally allow more. NOT enforced by
-# modelmesh (the limits shift with provider load and aren't always
+# MARS (the limits shift with provider load and aren't always
 # stable enough to encode as hard caps); just discoverable in code so
 # callers planning bulk-fanout work see the number alongside the
 # context window.
@@ -470,7 +531,7 @@ def _trim_history(messages: list[dict], max_tokens: int) -> list[dict]:
         # last resort: keep only the final user message
         rest = rest[-1:] if rest else []
     print(
-        f"[modelmesh] trimmed session history to "
+        f"[mars] trimmed session history to "
         f"~{_estimate_tokens(system + rest)} tokens",
         file=sys.stderr,
     )
@@ -590,7 +651,7 @@ async def _api_chat_with_session(
 #
 # The replacement prompt also tells Codex to emit outputs INLINE in its
 # reply rather than try to Write to disk — Codex's sandbox blocks Write
-# even at sandbox=danger-full-access, and modelmesh auto-overflows large
+# even at sandbox=danger-full-access, and MARS auto-overflows large
 # tool results to a temp file the caller can read back.
 
 CODEX_BRIEF_THRESHOLD = int(os.environ.get("CODEX_BRIEF_THRESHOLD", "3000"))
@@ -605,7 +666,7 @@ def _write_codex_brief(prompt: str) -> Path:
     arbitrary reads regardless of sandbox mode (workspace-write blocks
     writes outside cwd, but reads anywhere on disk are permitted).
     """
-    tmp_dir = Path(tempfile.gettempdir()) / "modelmesh-codex-briefs"
+    tmp_dir = Path(tempfile.gettempdir()) / "mars-codex-briefs"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     brief_path = tmp_dir / f"brief-{uuid.uuid4().hex[:12]}.md"
     brief_path.write_text(prompt, encoding="utf-8")
@@ -647,7 +708,7 @@ async def ask_codex(
     Args:
         prompt: Task description for Codex.
         model: Codex model id. Default: "gpt-5.5" (OpenAI flagship,
-            pinned in modelmesh 2026-04-30 — was CLI-deferred to
+            pinned 2026-04-30 — was CLI-deferred to
             whatever `codex` picks). Override per call:
               - "gpt-5" — prior generation
               - "o3" — reasoning-specialized
