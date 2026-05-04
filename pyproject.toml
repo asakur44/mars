@@ -1,12 +1,16 @@
 [project]
-name = "modelmesh"
+name = "mars"
 version = "0.1.0"
-description = "MCP server exposing Codex / Gemini / OpenRouter / DeepSeek / Grok as subagent tools, with stable session IDs for multi-turn continuity."
+description = "MARS — Model Adapter & Routing System. MCP server exposing Codex / Gemini / OpenRouter / DeepSeek / Grok / Z.AI as subagent tools, with stable session IDs for multi-turn continuity. Part of the Fr4ym + MARS + BCKS stack. (Project was previously named ModelMesh.)"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-authors = [{ name = "ModelMesh contributors" }]
-keywords = ["mcp", "claude-code", "subagent", "codex", "gemini", "openrouter", "deepseek", "grok", "xai", "llm", "modelmesh"]
+authors = [{ name = "MARS contributors" }]
+keywords = [
+  "mcp", "claude-code", "subagent", "codex", "gemini", "openrouter",
+  "deepseek", "grok", "xai", "zai", "zhipu", "glm", "kimi", "moonshot",
+  "llm", "router", "model-adapter", "mars", "fr4ym",
+]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
@@ -24,11 +28,15 @@ dependencies = [
 ]
 
 [project.scripts]
+mars = "server:main"
+# Legacy console-script alias — will emit a DeprecationWarning when MARS
+# server.py module-level code runs (via the env-var fallback paths) for
+# users still invoking the old name. Removed in MARS v0.2.0.
 modelmesh = "server:main"
 
 [project.urls]
-Homepage = "https://github.com/asakur44/ModelMesh"
-Issues = "https://github.com/asakur44/ModelMesh/issues"
+Homepage = "https://github.com/asakur44/mars"
+Issues = "https://github.com/asakur44/mars/issues"
 
 [build-system]
 requires = ["hatchling"]

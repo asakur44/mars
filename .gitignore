@@ -40,7 +40,8 @@ htmlcov/
 Thumbs.db
 
 # Local user state — never commit session files; they may contain prompts/responses
-.modelmesh/
+.mars/
+.modelmesh/  # legacy path; kept for safety while existing users migrate to ~/.mars/
 api-sessions/
 
 # Secrets — never commit real keys
