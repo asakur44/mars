@@ -72,7 +72,7 @@ import httpx
 import jwt
 from mcp.server.fastmcp import Context, FastMCP
 
-mcp = FastMCP("modelmesh")
+mcp = FastMCP("mars")
 
 
 # ---------------------------------------------------------------------------
