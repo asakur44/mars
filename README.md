@@ -14,6 +14,8 @@ Wraps six backends:
 | `ask_deepseek` | DeepSeek HTTPS API | `DEEPSEEK_API_KEY` env |
 | `ask_grok` | xAI Grok HTTPS API | `XAI_API_KEY` env |
 | `ask_zai` | Z.AI (Zhipu) HTTPS API — JWT auth handled internally | `ZAI_API_KEY` env (legacy `id.secret` shape) |
+| `ask_mimo` | Xiaomi MiMo HTTPS API (Singapore plan) | `MIMO_API_KEY` env |
+| `ask_kimi` | Kimi / Moonshot AI HTTPS API (`api.moonshot.ai`; `kimi-for-coding` → Kimi Code subscription) | `KIMI_API_KEY` env (`KIMI_CODE_API_KEY` for the coding route) |
 
 Plus admin tools: `list_api_sessions`, `delete_api_session`.
 
@@ -227,6 +229,9 @@ All optional. Set in the `--env` flags when registering, or in your shell enviro
 | `OPENROUTER_API_KEY` | OpenRouter API key | required for `ask_openrouter` |
 | `XAI_API_KEY` | xAI Grok API key | required for `ask_grok` |
 | `ZAI_API_KEY` | Z.AI (Zhipu) API key in legacy `id.secret` format — tool generates JWT internally | required for `ask_zai` |
+| `MIMO_API_KEY` | Xiaomi MiMo API key (Singapore plan) | required for `ask_mimo` |
+| `KIMI_API_KEY` | Kimi / Moonshot Open Platform API key (`api.moonshot.ai`) | required for `ask_kimi` |
+| `KIMI_CODE_API_KEY` | Kimi Code Console key — only for `ask_kimi(model="kimi-for-coding")` | optional |
 | `MARS_DIR` | Where to store API session files | `~/.mars/` |
 | `MARS_HEARTBEAT_INTERVAL_SEC` | Progress-heartbeat interval (seconds) | `30` |
 | `OPENROUTER_REFERER` | `HTTP-Referer` header sent to OpenRouter (analytics attribution) | omitted |

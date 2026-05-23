@@ -48,3 +48,6 @@ api-sessions/
 secrets.json
 *.key
 *.pem
+setup.bat              # local setup scripts often hardcode real API keys
+*_probe.py             # local probe/scratch scripts may embed client secrets
+*-auth.json            # cached OAuth refresh tokens (e.g. antigravity-auth.json)

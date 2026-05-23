@@ -12,16 +12,18 @@
 `modelmesh` console command and `MODELMESH_*` env vars continue to work
 with a DeprecationWarning until MARS v0.2.0 — see CHANGELOG.)
 
-Exposes six subagent tools to any MCP client (Claude Code, Cursor, etc.):
+Exposes eight subagent tools to any MCP client (Claude Code, Cursor, etc.):
   - ask_codex     -> wraps the local `codex` CLI (agentic loop)
   - ask_gemini    -> wraps the local `gemini` CLI (agentic loop)
   - ask_openrouter-> chat completion via OpenRouter (multi-turn supported)
   - ask_deepseek  -> chat completion via DeepSeek API (multi-turn supported)
   - ask_grok      -> chat completion via xAI Grok API (multi-turn supported)
   - ask_zai       -> chat completion via z.ai (Zhipu) GLM API (multi-turn supported)
+  - ask_mimo      -> chat completion via Xiaomi MiMo API (multi-turn supported)
+  - ask_kimi      -> chat completion via Kimi / Moonshot AI (multi-turn supported)
 
 Plus admin tools:
-  - list_api_sessions  -> enumerate stored DeepSeek/OpenRouter/Grok/z.ai sessions
+  - list_api_sessions  -> enumerate stored DeepSeek/OpenRouter/Grok/z.ai/mimo/kimi sessions
   - delete_api_session -> drop a stored session
 
 Codex/Gemini inherit auth from their own CLIs (`codex login`, `gemini auth`).
@@ -31,11 +33,15 @@ API tools read keys from env:
   - XAI_API_KEY        for ask_grok
   - ZAI_API_KEY        for ask_zai (legacy "id.secret" format; tool generates
                                     JWT per call, do NOT pre-sign)
+  - MIMO_API_KEY       for ask_mimo (Xiaomi MiMo Singapore plan)
+  - KIMI_API_KEY       for ask_kimi (Moonshot Open Platform, api.moonshot.ai)
+  - KIMI_CODE_API_KEY  for ask_kimi when model="kimi-for-coding" (Kimi Code
+                                    subscription, api.kimi.com/coding)
 
-All six chat tools return: {"output": str, "session_id": str | None}.
+All eight chat tools return: {"output": str, "session_id": str | None}.
 
 Codex / Gemini sessions live where the CLI puts them (codex sqlite,
-gemini chat files). DeepSeek / OpenRouter / Grok / z.ai sessions live in
+gemini chat files). DeepSeek / OpenRouter / Grok / z.ai / mimo / kimi sessions live in
 $MARS_DIR/api-sessions/<uuid>.json (default ~/.mars/api-sessions/, with
 ~/.modelmesh/ as a deprecated fallback if it already exists) — full
 message history, replayed on each call.
@@ -445,6 +451,19 @@ _MODEL_CONTEXT_HINT = {
     "glm-4.7-flash": 128_000,
     "glm-4.6": 128_000,
     "glm-4.5": 128_000,
+    # Kimi / Moonshot direct — api.moonshot.ai, api.kimi.com/coding (added 2026-05-23)
+    "kimi-k2.6": 262_000,
+    "kimi-k2.5": 262_000,
+    "kimi-k2": 262_000,
+    "kimi-for-coding": 262_000,
+    "moonshot-v1-128k": 128_000,
+    "moonshot-v1-32k": 32_000,
+    "moonshot-v1-8k": 8_000,
+    # Xiaomi MiMo direct — Singapore plan (added 2026-05-23)
+    "mimo-v2.5-pro": 256_000,
+    "mimo-v2.5": 256_000,
+    "mimo-v2-pro": 256_000,
+    "mimo-v2-omni": 256_000,
 }
 _DEFAULT_CONTEXT_HINT = 100_000  # safe-ish for most OpenRouter models
 
@@ -1204,17 +1223,141 @@ async def ask_zai(
     )
 
 
+@mcp.tool()
+async def ask_mimo(
+    prompt: str,
+    model: str = "mimo-v2.5-pro",
+    system: Optional[str] = None,
+    max_tokens: int = 100000,
+    session_id: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> dict:
+    """Chat completion via the Xiaomi MiMo API, with multi-turn sessions.
+
+    Continuity: this tool returns a session_id. To continue the same
+    conversation on a follow-up call, you MUST pass that session_id back.
+
+    Args:
+        prompt: User message.
+        model: MiMo model id (lowercase). Default: "mimo-v2.5-pro" (flagship).
+            The Singapore-plan endpoint accepts ONLY lowercase ids; any
+            casing passed here is lowercased before forwarding. Other
+            chat-capable choices:
+              - "mimo-v2.5"     — non-Pro V2.5 tier
+              - "mimo-v2-pro"   — previous-generation flagship
+              - "mimo-v2-omni"  — multimodal V2-series
+            TTS models ("mimo-v2.5-tts", "mimo-v2.5-tts-voiceclone",
+            "mimo-v2.5-tts-voicedesign", "mimo-v2-tts") are NOT supported
+            by this chat-completion tool; they require separate audio
+            endpoints.
+        system: Optional system prompt (fresh sessions only).
+        max_tokens: Cap on response tokens. Default 100000.
+        session_id: None for fresh session, UUID from prior call to resume.
+
+    Endpoint: OpenAI-compatible /v1 on the Singapore plan
+    (https://token-plan-sgp.xiaomimimo.com/v1).
+
+    Returns:
+        {"output": str, "session_id": str}
+    """
+    api_key = _require_env("MIMO_API_KEY")
+    # Xiaomi MiMo Singapore endpoint accepts only lowercase model ids
+    # (e.g. "mimo-v2.5-pro", not "MiMo-V2.5-Pro"). Normalize defensively so
+    # any casing — including the PascalCase form older docs may suggest —
+    # works without surfacing a 400 "Not supported model" to the caller.
+    model = model.lower()
+    return await _api_chat_with_session(
+        ctx=ctx,
+        provider="mimo",
+        base_url="https://token-plan-sgp.xiaomimimo.com/v1",
+        api_key=api_key,
+        model=model,
+        prompt=prompt,
+        system=system,
+        max_tokens=max_tokens,
+        session_id=session_id,
+    )
+
+
+@mcp.tool()
+async def ask_kimi(
+    prompt: str,
+    model: str = "kimi-k2.6",
+    system: Optional[str] = None,
+    max_tokens: int = 100000,
+    session_id: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> dict:
+    """Chat completion via Kimi (Moonshot AI), with multi-turn sessions.
+
+    Continuity: this tool returns a session_id. To continue the same
+    conversation on a follow-up call, you MUST pass that session_id back.
+
+    Args:
+        prompt: User message.
+        model: Kimi model id. Default: "kimi-k2.6" (Moonshot flagship,
+            served from the Open Platform endpoint https://api.moonshot.ai/v1,
+            billed per token). Other Moonshot ids: "kimi-k2.5",
+            "moonshot-v1-8k" / "moonshot-v1-32k" / "moonshot-v1-128k".
+            Special: model="kimi-for-coding" routes to the Kimi Code
+            *subscription* endpoint (https://api.kimi.com/coding/v1) and
+            requires KIMI_CODE_API_KEY instead of KIMI_API_KEY.
+            Note: kimi-k2.5/k2.6 only accept temperature=1; MARS never
+            sends a temperature field, so the model's own default applies.
+        system: Optional system prompt (fresh sessions only).
+        max_tokens: Cap on response tokens. Default 100000.
+        session_id: None for fresh session, UUID from prior call to resume.
+
+    Auth: KIMI_API_KEY (Moonshot Open Platform console) for every model
+    except "kimi-for-coding", which uses KIMI_CODE_API_KEY (Kimi Code
+    Console; tied to a Kimi membership, quota refreshes every 7 days).
+
+    Returns:
+        {"output": str, "session_id": str}
+    """
+    if model == "kimi-for-coding":
+        # Dormant route: the Kimi Code *subscription* endpoint. Only usable if
+        # the operator has explicitly provisioned a Kimi Code Console key.
+        # Guarded so it never silently misroutes during normal operation —
+        # the working/default route is Moonshot + kimi-k2.6 below.
+        if not os.environ.get("KIMI_CODE_API_KEY"):
+            raise RuntimeError(
+                "model='kimi-for-coding' targets the Kimi Code subscription "
+                "endpoint, which is NOT configured (KIMI_CODE_API_KEY unset). "
+                "Use the default model 'kimi-k2.6' (Moonshot Open Platform), "
+                "which is the active route, or set KIMI_CODE_API_KEY first."
+            )
+        base_url = "https://api.kimi.com/coding/v1"
+        api_key = os.environ["KIMI_CODE_API_KEY"]
+    else:
+        # Default / active route: Moonshot Open Platform (api.moonshot.ai),
+        # authenticated by KIMI_API_KEY. This is the only configured path.
+        base_url = "https://api.moonshot.ai/v1"
+        api_key = _require_env("KIMI_API_KEY")
+    return await _api_chat_with_session(
+        ctx=ctx,
+        provider="kimi",
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        prompt=prompt,
+        system=system,
+        max_tokens=max_tokens,
+        session_id=session_id,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Session admin tools
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
 async def list_api_sessions(provider: Optional[str] = None) -> list[dict]:
-    """List stored DeepSeek / OpenRouter / Grok / z.ai sessions, newest first.
+    """List stored DeepSeek / OpenRouter / Grok / z.ai / mimo / kimi sessions, newest first.
 
     Args:
-        provider: Filter to "deepseek", "openrouter", "grok", or "zai".
-            None returns all.
+        provider: Filter to "deepseek", "openrouter", "grok", "zai", "mimo",
+            or "kimi". None returns all.
 
     Returns:
         A list of session metadata dicts:
@@ -1247,7 +1390,7 @@ async def list_api_sessions(provider: Optional[str] = None) -> list[dict]:
 
 @mcp.tool()
 async def delete_api_session(session_id: str) -> dict:
-    """Delete a stored DeepSeek / OpenRouter / Grok / z.ai session.
+    """Delete a stored DeepSeek / OpenRouter / Grok / z.ai / mimo / kimi session.
 
     Returns:
         {"deleted": bool, "session_id": str, "reason": str | None}
