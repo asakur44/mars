@@ -1,6 +1,6 @@
 # MARS
 
-**Model Adapter & Routing System.** An MCP server that lets Claude Code (or any MCP client) delegate work to other LLMs as subagents — preserving conversation continuity across turns via stable session IDs. Part of the Fr4ym + MARS + BCKS stack.
+**Model Adapter Routing System.** An MCP server that lets Claude Code (or any MCP client) delegate work to other LLMs as subagents — preserving conversation continuity across turns via stable session IDs. Part of the Fr4ym + MARS + BCKS stack.
 
 > **Renamed from ModelMesh on 2026-05-04.** The legacy `modelmesh` console command, `MODELMESH_*` env vars, and `~/.modelmesh/` storage path continue to work with a `DeprecationWarning` through MARS v0.2.0. See [CHANGELOG.md](./CHANGELOG.md) for the full migration path.
 

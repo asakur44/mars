@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (BREAKING)
 
-- **Project renamed: ModelMesh → MARS** (Model Adapter & Routing System).
+- **Project renamed: ModelMesh → MARS** (Model Adapter Routing System).
   Part of the Fr4ym + MARS + BCKS stack.
 - **MCP server registration name** changed from `modelmesh` to `mars`.
 - **MCP tool names** auto-derived from the server name and therefore changed

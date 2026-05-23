@@ -6,7 +6,7 @@
 #   "pyjwt>=2.0.0",
 # ]
 # ///
-"""MARS — Model Adapter & Routing System (MCP server).
+"""MARS — Model Adapter Routing System (MCP server).
 
 (Project was previously named ModelMesh; renamed 2026-05-04. The legacy
 `modelmesh` console command and `MODELMESH_*` env vars continue to work

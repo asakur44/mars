@@ -1,7 +1,7 @@
 [project]
 name = "mars"
 version = "0.1.0"
-description = "MARS — Model Adapter & Routing System. MCP server exposing Codex / Gemini / OpenRouter / DeepSeek / Grok / Z.AI as subagent tools, with stable session IDs for multi-turn continuity. Part of the Fr4ym + MARS + BCKS stack. (Project was previously named ModelMesh.)"
+description = "MARS — Model Adapter Routing System. MCP server exposing Codex / Gemini / OpenRouter / DeepSeek / Grok / Z.AI as subagent tools, with stable session IDs for multi-turn continuity. Part of the Fr4ym + MARS + BCKS stack. (Project was previously named ModelMesh.)"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
