@@ -499,6 +499,12 @@ _MODEL_PRACTICAL_OUTPUT_CEILING = {
     "glm-4.7-flash": 16_000,
     "glm-4.6": 16_000,
     "glm-4.5": 16_000,
+    # Xiaomi MiMo — conservative 32K pending bulk-fanout evidence
+    # against the Singapore endpoint.
+    "mimo-v2.5-pro": 32_000,
+    "mimo-v2.5": 32_000,
+    "mimo-v2-pro": 32_000,
+    "mimo-v2-omni": 32_000,
     # DeepSeek V4 — thinking-mode V4-Pro tolerates moderate outputs
     # but reasoning_content allocation eats budget; fragment beyond
     # ~32K output. V4-Flash is non-thinking, more headroom.
