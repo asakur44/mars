@@ -4,6 +4,7 @@
 #   "mcp>=1.2.0",
 #   "httpx>=0.27.0",
 #   "pyjwt>=2.0.0",
+#   "pywinpty==2.0.14; sys_platform == 'win32'",
 # ]
 # ///
 """MARS — Model Adapter Routing System (MCP server).
@@ -12,9 +13,12 @@
 `modelmesh` console command and `MODELMESH_*` env vars continue to work
 with a DeprecationWarning until MARS v0.2.0 — see CHANGELOG.)
 
-Exposes eight subagent tools to any MCP client (Claude Code, Cursor, etc.):
+Exposes nine subagent tools to any MCP client (Claude Code, Cursor, etc.):
   - ask_codex     -> wraps the local `codex` CLI (agentic loop)
   - ask_gemini    -> wraps the local `gemini` CLI (agentic loop)
+  - ask_agy       -> wraps the local `agy` Antigravity CLI: Claude Opus/
+                     Sonnet 4.6 (Thinking) + Gemini 3.5/3.1 on Google AI Pro
+                     (multi-turn via agy conversations; Windows ConPTY)
   - ask_openrouter-> chat completion via OpenRouter (multi-turn supported)
   - ask_deepseek  -> chat completion via DeepSeek API (multi-turn supported)
   - ask_grok      -> chat completion via xAI Grok API (multi-turn supported)
@@ -26,7 +30,9 @@ Plus admin tools:
   - list_api_sessions  -> enumerate stored DeepSeek/OpenRouter/Grok/z.ai/mimo/kimi sessions
   - delete_api_session -> drop a stored session
 
-Codex/Gemini inherit auth from their own CLIs (`codex login`, `gemini auth`).
+Codex/Gemini/agy inherit auth from their own CLIs (`codex login`,
+`gemini auth`, `agy` interactive Google OAuth). ask_agy additionally needs
+pywinpty==2.0.14 (agy demands a real console; see _agy_pty_run).
 API tools read keys from env:
   - OPENROUTER_API_KEY for ask_openrouter
   - DEEPSEEK_API_KEY   for ask_deepseek
@@ -38,7 +44,7 @@ API tools read keys from env:
   - KIMI_CODE_API_KEY  for ask_kimi when model="kimi-for-coding" (Kimi Code
                                     subscription, api.kimi.com/coding)
 
-All eight chat tools return: {"output": str, "session_id": str | None}.
+All nine chat tools return: {"output": str, "session_id": str | None}.
 
 Codex / Gemini sessions live where the CLI puts them (codex sqlite,
 gemini chat files). DeepSeek / OpenRouter / Grok / z.ai / mimo / kimi sessions live in
@@ -1351,6 +1357,132 @@ async def ask_kimi(
         max_tokens=max_tokens,
         session_id=session_id,
     )
+
+
+# ---------------------------------------------------------------------------
+# Antigravity CLI (agy) — Claude Opus/Sonnet 4.6 + Gemini via Google AI Pro
+# ---------------------------------------------------------------------------
+
+_AGY_STATE_DIR = Path.home() / ".gemini" / "antigravity-cli"
+_AGY_HELPER = Path(__file__).resolve().parent / "agy_pty_helper.py"
+
+
+async def _agy_pty_run(args: list[str], timeout_sec: int, cwd: Optional[str]) -> str:
+    """Run agy via the ConPTY helper process and return cleaned output.
+
+    agy blocks forever with zero output when stdio is a pipe — every
+    subcommand, including `-p` print mode, demands a real console. The
+    helper provides one via pywinpty. It runs as a separate process
+    because pywinpty's ConPTY cannot share a process with asyncio's
+    Windows proactor loop (Overlapped deallocation kills the loop,
+    observed 2026-06-11). See agy_pty_helper.py for the protocol.
+    """
+    if shutil.which("agy") is None:
+        raise RuntimeError(
+            "`agy` not found on PATH. Install the Antigravity CLI and sign in "
+            "(Google OAuth) by running `agy` once in a real terminal."
+        )
+    payload = json.dumps({"args": args, "timeout_sec": timeout_sec, "cwd": cwd})
+    # The helper enforces timeout_sec itself; give the subprocess wrapper
+    # slack so the helper's clearer timeout message wins the race.
+    stdout, _stderr = await _run_subprocess(
+        [sys.executable, str(_AGY_HELPER)],
+        timeout_sec=timeout_sec + 30,
+        stdin_data=payload,
+    )
+    return json.loads(stdout)["output"]
+
+
+def _agy_conversation_for_cwd(cwd: str) -> Optional[str]:
+    """agy records cwd -> conversation-id in last_conversations.json."""
+    cache = _AGY_STATE_DIR / "cache" / "last_conversations.json"
+    try:
+        data = json.loads(cache.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data.get(cwd)
+
+
+def _agy_newest_conversation_since(start_ts: float) -> Optional[str]:
+    """Fallback id discovery: newest conversation db touched after start."""
+    conv_dir = _AGY_STATE_DIR / "conversations"
+    best, best_mtime = None, start_ts
+    try:
+        for p in conv_dir.glob("*.db"):
+            mtime = p.stat().st_mtime
+            if mtime >= best_mtime:
+                best, best_mtime = p.stem, mtime
+    except OSError:
+        return None
+    return best
+
+
+@mcp.tool()
+async def ask_agy(
+    prompt: str,
+    model: str = "Claude Opus 4.6 (Thinking)",
+    cwd: Optional[str] = None,
+    timeout_sec: int = 600,
+    session_id: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> dict:
+    """Run a prompt through the Google Antigravity CLI (`agy`) — the panelist
+    route to Claude Opus 4.6 / Sonnet 4.6 (Thinking) and Gemini 3.5/3.1,
+    billed to the Google AI Pro subscription instead of per-token APIs.
+
+    Continuity: this tool returns a session_id (an agy conversation id).
+    To continue the same conversation on a follow-up call, you MUST pass
+    that session_id back. Omitting it starts a fresh conversation that has
+    no memory of prior turns. Only start fresh when the work is unrelated.
+
+    Args:
+        prompt: User message.
+        model: agy model label, passed verbatim (labels contain spaces and
+            parentheses — keep them exact). Default:
+            "Claude Opus 4.6 (Thinking)". Available labels (from
+            `agy models`, 2026-06-10):
+              - "Claude Opus 4.6 (Thinking)"   — deepest reasoning panelist
+              - "Claude Sonnet 4.6 (Thinking)" — strong code + writing
+              - "Gemini 3.5 Flash (Low|Medium|High)" — fast, tiered effort
+              - "Gemini 3.1 Pro (Low|High)"    — Google advanced reasoning
+              - "GPT-OSS 120B (Medium)"        — open-weights perspective
+            Ignored on resume: agy locks the conversation to its original
+            model.
+        cwd: Working directory for agy. Defaults to the MCP server's CWD.
+            Must be a trusted workspace (agy settings.json
+            trustedWorkspaces), otherwise agy hangs on an interactive
+            trust prompt until timeout.
+        timeout_sec: Hard kill after this many seconds. Default 10 minutes
+            (thinking models can be slow to first token).
+        session_id: None for a fresh conversation, or a conversation UUID
+            from a previous call to resume it.
+
+    Returns:
+        {"output": str, "session_id": str | None}
+        Stash session_id; pass it back to continue.
+
+    Auth is the agy CLI's own Google OAuth (no API key env var). If calls
+    start timing out with empty output, re-auth by launching `agy` in a
+    visible terminal. Windows-only as implemented (ConPTY via pywinpty).
+    """
+    args = ["agy"]
+    if session_id:
+        args.extend(["--conversation", session_id])
+    else:
+        args.extend(["--model", model])
+    args.extend(["-p", prompt, "--print-timeout", f"{max(timeout_sec - 15, 30)}s"])
+
+    effective_cwd = str(Path(cwd or os.getcwd()).resolve())
+    start_ts = time.time()
+    async with _heartbeat_context(ctx, "agy", model):
+        output = await _agy_pty_run(args, timeout_sec, effective_cwd)
+
+    resolved_id = (
+        session_id
+        or _agy_conversation_for_cwd(effective_cwd)
+        or _agy_newest_conversation_since(start_ts)
+    )
+    return {"output": output, "session_id": resolved_id}
 
 
 # ---------------------------------------------------------------------------
