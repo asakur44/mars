@@ -433,6 +433,7 @@ _MODEL_CONTEXT_HINT = {
     "moonshotai/kimi-k2.5": 262_000,
     "moonshotai/kimi-latest": 262_000,
     # xAI Grok direct
+    "grok-4.3": 1_000_000,  # current flagship (added 2026-06-13)
     "grok-4-1-fast": 2_000_000,
     "grok-4-1-fast-latest": 2_000_000,
     "grok-4-1-fast-reasoning": 2_000_000,
@@ -521,6 +522,7 @@ _MODEL_PRACTICAL_OUTPUT_CEILING = {
     # xAI Grok — flagship reasoning empirically holds bulk-fanout
     # cleanly (5–15 min calls observed clean per chairman's runs).
     # Cheaper variants are similar shape but smaller context.
+    "grok-4.3": 60_000,
     "grok-4.20-reasoning": 60_000,
     "grok-4.20-0309-reasoning": 60_000,
     "grok-4.20-0309-non-reasoning": 60_000,
@@ -1067,7 +1069,7 @@ async def ask_deepseek(
 @mcp.tool()
 async def ask_grok(
     prompt: str,
-    model: str = "grok-4.20-reasoning",
+    model: str = "grok-4.3",
     system: Optional[str] = None,
     max_tokens: int = 100000,
     session_id: Optional[str] = None,
@@ -1082,10 +1084,12 @@ async def ask_grok(
 
     Args:
         prompt: User message.
-        model: xAI model id. Default: "grok-4.20-reasoning" (xAI
-            flagship "best overall — recommended"; reasoning variant;
-            $2/$6 per M tokens in/out at 2026-04-27).
+        model: xAI model id. Default: "grok-4.3" (xAI flagship; leads
+            on non-hallucination rate, agentic tool-calling, and
+            instruction following; 1M context; $1.25/$2.50 per M
+            tokens in/out, $0.20/M cached input, at 2026-06-13).
             Other choices:
+              - "grok-4.20-reasoning" — prior flagship reasoning variant
               - "grok-4.20-0309-reasoning" — date-stamped reasoning variant
               - "grok-4.20-0309-non-reasoning" — faster, lower latency
               - "grok-4.20-multi-agent-0309" — multi-agent / swarm reasoning

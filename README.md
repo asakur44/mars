@@ -126,10 +126,11 @@ ask_deepseek(prompt="...", model="deepseek-v4-flash")
 
 Legacy aliases `deepseek-chat` / `deepseek-reasoner` route to V4-Flash non-thinking / thinking-mode respectively; both deprecated 2026-07-24.
 
-`ask_grok` defaults to `grok-4.20-reasoning` (xAI flagship reasoning). Other choices:
+`ask_grok` defaults to `grok-4.3` (xAI flagship — leads on non-hallucination rate, agentic tool-calling, and instruction following; 1M context; $1.25/$2.50 per M, $0.20/M cached input). Other choices:
 
 ```python
-ask_grok(prompt="...", model="grok-4-1-fast-reasoning")  # 10× cheaper, 2M ctx, high-volume
+ask_grok(prompt="...", model="grok-4.20-reasoning")       # prior flagship reasoning
+ask_grok(prompt="...", model="grok-4-1-fast-reasoning")   # 10× cheaper, 2M ctx, high-volume
 ask_grok(prompt="...", model="grok-code-fast-1")          # agentic coding (256K)
 ```
 
@@ -281,7 +282,7 @@ History is replayed each call; oldest pairs are trimmed when context approaches 
 
 ### `ask_grok(prompt, model?, system?, max_tokens?, session_id?)`
 
-- `model`: default `"grok-4.20-reasoning"` (xAI flagship reasoning; $2/$6 per M tokens). Drop to `"grok-4-1-fast-reasoning"` ($0.20/$0.50 per M, 2M ctx) for high-volume work. Other ids: `"grok-code-fast-1"` (256K coding-tuned), `"grok-4"` / `"grok-4-0709"` (older 256K).
+- `model`: default `"grok-4.3"` (xAI flagship; leads on non-hallucination rate, agentic tool-calling, instruction following; 1M ctx; $1.25/$2.50 per M, $0.20/M cached input). Prior flagship `"grok-4.20-reasoning"` ($2/$6 per M). Drop to `"grok-4-1-fast-reasoning"` ($0.20/$0.50 per M, 2M ctx) for high-volume work. Other ids: `"grok-code-fast-1"` (256K coding-tuned), `"grok-4"` / `"grok-4-0709"` (older 256K).
 - `max_tokens`: default `100000`.
 - `session_id`: same shape as the other API tools — None for fresh, a UUID from a previous call to resume.
 
