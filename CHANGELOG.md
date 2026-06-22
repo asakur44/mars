@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Context-window hints and `list/delete_api_session` provider support for
   the `mimo` and `kimi` providers.
 
+### Removed
+
+- **`ask_gemini`** — removed 2026-06-22. Google discontinued the free Gemini
+  Code Assist CLI tier (`IneligibleTierError: This client is no longer supported
+  for Gemini Code Assist for individuals … migrate to the Antigravity suite`), so
+  the `gemini` CLI no longer authenticates as a subagent. The tool, its
+  `~/.gemini` chat-tracking helpers (`_gemini_chats_dir`, `_gemini_chat_files`,
+  `_gemini_id_from_filename`, `_resolve_gemini_index`, `_GEMINI_FILE_RE`), and the
+  docstring/README references are removed. **Gemini models remain reachable via
+  `ask_agy`** (Antigravity CLI: `Gemini 3.1 Pro` / `Gemini 3.5 Flash` labels on
+  the Google AI Pro plan). The server now exposes **eight** subagent tools.
+
 ### Changed (BREAKING)
 
 - **Project renamed: ModelMesh → MARS** (Model Adapter Routing System).

@@ -4,12 +4,11 @@
 
 > **Renamed from ModelMesh on 2026-05-04.** The legacy `modelmesh` console command, `MODELMESH_*` env vars, and `~/.modelmesh/` storage path continue to work with a `DeprecationWarning` through MARS v0.2.0. See [CHANGELOG.md](./CHANGELOG.md) for the full migration path.
 
-Wraps six backends:
+Wraps seven backends:
 
 | Tool | Backend | Auth |
 |---|---|---|
 | `ask_codex` | Local [`codex`](https://developers.openai.com/codex/cli) CLI (full agent loop) | `codex login` |
-| `ask_gemini` | Local [`gemini`](https://geminicli.com) CLI (full agent loop) | `gemini auth` |
 | `ask_openrouter` | OpenRouter HTTPS API (any model) | `OPENROUTER_API_KEY` env |
 | `ask_deepseek` | DeepSeek HTTPS API | `DEEPSEEK_API_KEY` env |
 | `ask_grok` | xAI Grok HTTPS API | `XAI_API_KEY` env |
@@ -23,9 +22,9 @@ Plus admin tools: `list_api_sessions`, `delete_api_session`.
 
 ## Why this exists
 
-Claude Code is great, but sometimes you want a second opinion from GPT-5.5, or to delegate a long task to Gemini's 1M-context model, or to run cheap reasoning on DeepSeek-V4-Flash, or to triangulate against Z.AI's GLM-5.1. Doing this by hand — switching tools, copy-pasting context, losing thread — is friction.
+Claude Code is great, but sometimes you want a second opinion from GPT-5.5, or to delegate a long task to Kimi's long-context model, or to run cheap reasoning on DeepSeek-V4-Flash, or to triangulate against Z.AI's GLM-5.2. Doing this by hand — switching tools, copy-pasting context, losing thread — is friction.
 
-MARS turns those LLMs into first-class tools Claude can call mid-conversation. Each call returns a `session_id` you can pass back on the next call to keep the conversation going. Codex/Gemini sessions persist in their own native stores; DeepSeek/OpenRouter/Grok/Z.AI conversations are kept in a local JSON store and replayed on each call.
+MARS turns those LLMs into first-class tools Claude can call mid-conversation. Each call returns a `session_id` you can pass back on the next call to keep the conversation going. Codex sessions persist in its own native store; DeepSeek/OpenRouter/Grok/Z.AI conversations are kept in a local JSON store and replayed on each call.
 
 ---
 
@@ -35,7 +34,7 @@ MARS turns those LLMs into first-class tools Claude can call mid-conversation. E
 
 - Python 3.10+ (PyJWT is now a dependency — `pip install` handles it; `uv run` reads it from PEP 723 metadata)
 - For `ask_codex`: install and authenticate [Codex CLI](https://developers.openai.com/codex/cli) (`npm install -g @openai/codex` then `codex login`)
-- For `ask_gemini`: install and authenticate [Gemini CLI](https://geminicli.com) (`npm install -g @google/gemini-cli` then `gemini auth`)
+- ~~For `ask_gemini`~~: **removed 2026-06-22** — Google discontinued the free Gemini Code Assist CLI tier. Reach Gemini models via `ask_agy` (Antigravity) instead.
 - For `ask_openrouter`: an [OpenRouter API key](https://openrouter.ai/settings/keys)
 - For `ask_deepseek`: a [DeepSeek API key](https://platform.deepseek.com/api_keys)
 - For `ask_grok`: an [xAI API key](https://console.x.ai/)
@@ -134,12 +133,6 @@ ask_grok(prompt="...", model="grok-4-1-fast-reasoning")   # 10× cheaper, 2M ctx
 ask_grok(prompt="...", model="grok-code-fast-1")          # agentic coding (256K)
 ```
 
-`ask_gemini` defaults to `gemini-3.1-pro-preview` (preview tier — Google rotates `-preview` ids on roughly quarterly cadence; revisit when it gets promoted). Override to a stable tier when you don't want preview-rotation risk:
-
-```python
-ask_gemini(prompt="...", model="gemini-2.5-pro")
-```
-
 `ask_zai` defaults to `glm-5.1` (Zhipu AI flagship; thinking-mode with separate `reasoning_content` stream like `deepseek-reasoner`). Other GLM variants:
 
 ```python
@@ -163,7 +156,7 @@ Claude Code won't automatically capture session IDs unless you teach it to. Add 
 ```markdown
 ## mars — session_id continuity
 
-The MCP server `mars` exposes `ask_codex`, `ask_gemini`,
+The MCP server `mars` exposes `ask_codex`,
 `ask_deepseek`, `ask_openrouter`, `ask_grok`, `ask_zai`. Each returns
 `{"output": str, "session_id": str | None}`.
 
@@ -193,7 +186,7 @@ silent failures:
   `grok-4.20-reasoning` empirically holds long single-call output;
   xAI is the only gateway that reliably delivers it.
 - Per-section structured outputs (small per-table calls):
-  `ask_zai` / `ask_deepseek` / `ask_gemini` are fine. For GLM-5.1
+  `ask_zai` / `ask_deepseek` are fine. For GLM-5.1
   specifically, fragment large work into 5–10 per-table calls —
   Z.AI gateway truncates or 504s on bulk requests >~16K output.
 - Heavy agentic work in a repo: `ask_codex` (MARS handles the
@@ -253,16 +246,6 @@ Runs the Codex CLI's full agent loop (read files, edit, run shell commands) insi
 - `cwd`: working directory for Codex (default: server's CWD)
 - `session_id`: pass `None` for fresh, `"last"` for most recent, or any UUID/thread name to resume that exact session
 
-### `ask_gemini(prompt, model?, cwd?, approval_mode?, timeout_sec?, session_id?)`
-
-Runs the Gemini CLI as an agent.
-
-- `model`: default `"gemini-3.1-pro-preview"`. Preview tier — Google rotates `-preview` ids quarterly; revisit when it promotes. Override to `"gemini-2.5-pro"` for stable.
-- `approval_mode`: `"yolo"` (default) | `"auto_edit"` | `"plan"` (read-only) — must NOT be `"default"` (would block on prompts)
-- `session_id`: pass `None` for fresh, `"last"` for most recent, or a hex id previously returned by this tool
-
-Note: Gemini's CLI resumes by mtime-ordered index, not by stable id. The server resolves your hex id to the current index by scanning `~/.gemini/tmp/<user>/chats/`. IDs are stable as long as the chat file isn't deleted.
-
 ### `ask_openrouter(prompt, model?, system?, max_tokens?, session_id?)`
 
 Stateless API calls + local session replay.
@@ -309,7 +292,6 @@ Drop a stored session.
 | Provider | Session storage | ID stability |
 |---|---|---|
 | Codex | Codex's own SQLite + rollout JSONL in `~/.codex/` | Stable UUIDs. Pass back to resume. |
-| Gemini | Gemini's chat files in `~/.gemini/tmp/<user>/chats/` | Hex suffix from filename. Stable as long as file exists. |
 | DeepSeek | `$MARS_DIR/api-sessions/<uuid>.json` | UUID we generate. Atomic JSON writes. |
 | OpenRouter | Same as DeepSeek | Same. |
 | Grok | Same as DeepSeek | Same. |
@@ -359,10 +341,9 @@ Empirically observed:
 | `deepseek-v4-flash` | ~64K | ✓ Generally holds (non-thinking). |
 | `deepseek-v4-pro` | ~32K | △ Thinking-mode reserves significant budget for internal reasoning; bulk above ~32K can degrade. |
 | `moonshotai/kimi-k2.6` | ~32K | △ Treat conservatively — bulk-fanout limit unverified beyond small calls. |
-| `gemini-3.1-pro-preview` | ~32K | △ Treat conservatively pending evidence. |
 | `glm-5.1` (and the GLM family) | **~16K** | **✗ Fails.** Z.AI gateway truncates / 504s on bulk-output requests. Empirical pattern that works on GLM: per-table fragmentation (5–10 per-section calls of ~4K output each), assembled client-side. |
 
-**The verdict that follows from this:** for bulk fan-out work — single call producing >10K output — route through `ask_grok` with `grok-4.20-reasoning`. For per-section work where each call produces ~4K output and the caller assembles the result, `ask_zai` / `ask_deepseek` / `ask_gemini` are all fine. Don't try to drop GLM-5.1 in as a Grok substitute on bulk-fanout requests; the gateway-side ceiling will silently fail you.
+**The verdict that follows from this:** for bulk fan-out work — single call producing >10K output — route through `ask_grok` with `grok-4.20-reasoning`. For per-section work where each call produces ~4K output and the caller assembles the result, `ask_zai` / `ask_deepseek` are all fine. Don't try to drop GLM-5.1 in as a Grok substitute on bulk-fanout requests; the gateway-side ceiling will silently fail you.
 
 ### Patterns that still require caller discipline
 
@@ -378,7 +359,7 @@ Even with the engineered fixes, four orchestration patterns remain caller-side:
 ## Limitations / known issues
 
 - **No streaming.** Tools return final text only. Codex/Gemini agent loops can take minutes; you won't see partial output.
-- **No image input** for `ask_codex` / `ask_gemini` (CLIs support `-i`; not exposed yet).
+- **No image input** for `ask_codex` (CLI supports `-i`; not exposed yet).
 - **DeepSeek/OpenRouter/Grok/Z.AI token cost grows linearly per turn** — full history is resent each call. DeepSeek's context caching offsets repeat-prefix cost; OpenRouter pass-through depends on the underlying provider; xAI's caching policy varies by model; Z.AI doesn't currently surface a caching parameter on `paas/v4`.
 - **Thinking-mode models can hit `max_tokens` invisibly** if you set the cap too low — the model spends 2–6K tokens on internal reasoning before producing visible output, so `max_tokens=4096` will silently truncate real work. The `100000` default avoids this; budget at least 16K if you override.
 - **MCP progress notifications are best-effort.** Heartbeats emit via the standard MCP `notifications/progress` channel; clients that don't understand them silently ignore. There's an open issue ([modelcontextprotocol/python-sdk#953](https://github.com/modelcontextprotocol/python-sdk/issues/953)) on streamable-HTTP transport — if your MCP client uses streamable-HTTP, verify heartbeats reach the watchdog before relying on them. Stdio transport (Claude Code's default) is unaffected.
@@ -400,6 +381,6 @@ PRs welcome. The whole server is one file (`server.py`) plus `pyproject.toml` �
 
 Areas where help would be useful:
 - Streaming output (would require an MCP shape change)
-- Image input for Codex/Gemini
+- Image input for Codex
 - More providers (Anthropic direct, local Ollama, Mistral, etc.)
 - Tests

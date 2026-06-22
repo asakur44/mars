@@ -13,12 +13,15 @@
 `modelmesh` console command and `MODELMESH_*` env vars continue to work
 with a DeprecationWarning until MARS v0.2.0 — see CHANGELOG.)
 
-Exposes nine subagent tools to any MCP client (Claude Code, Cursor, etc.):
+Exposes eight subagent tools to any MCP client (Claude Code, Cursor, etc.):
   - ask_codex     -> wraps the local `codex` CLI (agentic loop)
-  - ask_gemini    -> wraps the local `gemini` CLI (agentic loop)
   - ask_agy       -> wraps the local `agy` Antigravity CLI: Claude Opus/
                      Sonnet 4.6 (Thinking) + Gemini 3.5/3.1 on Google AI Pro
                      (multi-turn via agy conversations; Windows ConPTY)
+                     NOTE: the standalone `ask_gemini` tool (the `gemini` CLI)
+                     was removed 2026-06-22 — Google discontinued the free
+                     Gemini Code Assist CLI tier ("IneligibleTierError …
+                     migrate to Antigravity"); reach Gemini via ask_agy.
   - ask_openrouter-> chat completion via OpenRouter (multi-turn supported)
   - ask_deepseek  -> chat completion via DeepSeek API (multi-turn supported)
   - ask_grok      -> chat completion via xAI Grok API (multi-turn supported)
@@ -30,8 +33,8 @@ Plus admin tools:
   - list_api_sessions  -> enumerate stored DeepSeek/OpenRouter/Grok/z.ai/mimo/kimi sessions
   - delete_api_session -> drop a stored session
 
-Codex/Gemini/agy inherit auth from their own CLIs (`codex login`,
-`gemini auth`, `agy` interactive Google OAuth). ask_agy additionally needs
+Codex/agy inherit auth from their own CLIs (`codex login`,
+`agy` interactive Google OAuth). ask_agy additionally needs
 pywinpty==2.0.14 (agy demands a real console; see _agy_pty_run).
 API tools read keys from env:
   - OPENROUTER_API_KEY for ask_openrouter
@@ -44,10 +47,10 @@ API tools read keys from env:
   - KIMI_CODE_API_KEY  for ask_kimi when model="kimi-for-coding" (Kimi Code
                                     subscription, api.kimi.com/coding)
 
-All nine chat tools return: {"output": str, "session_id": str | None}.
+All eight chat tools return: {"output": str, "session_id": str | None}.
 
-Codex / Gemini sessions live where the CLI puts them (codex sqlite,
-gemini chat files). DeepSeek / OpenRouter / Grok / z.ai / mimo / kimi sessions live in
+Codex sessions live where the CLI puts them (codex sqlite).
+DeepSeek / OpenRouter / Grok / z.ai / mimo / kimi sessions live in
 $MARS_DIR/api-sessions/<uuid>.json (default ~/.mars/api-sessions/, with
 ~/.modelmesh/ as a deprecated fallback if it already exists) — full
 message history, replayed on each call.
@@ -174,52 +177,6 @@ def _extract_codex_session_id(stdout: str, stderr: str) -> Optional[str]:
         m = _UUID_RE.search(text)
         if m:
             return m.group(1).lower()
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Gemini chat tracking
-# ---------------------------------------------------------------------------
-
-_GEMINI_FILE_RE = re.compile(r"session-.+-([0-9a-fA-F]{6,})\.jsonl$")
-
-
-def _gemini_chats_dir() -> Optional[Path]:
-    """Locate `~/.gemini/tmp/<user>/chats/` (varies by OS user)."""
-    base = Path.home() / ".gemini" / "tmp"
-    if not base.exists():
-        return None
-    candidates = [p / "chats" for p in base.iterdir() if (p / "chats").is_dir()]
-    if not candidates:
-        return None
-    # Most-recently-touched wins if there are multiple users on the box.
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0]
-
-
-def _gemini_chat_files() -> list[Path]:
-    d = _gemini_chats_dir()
-    if not d:
-        return []
-    return sorted(
-        d.glob("session-*.jsonl"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-
-
-def _gemini_id_from_filename(p: Path) -> Optional[str]:
-    m = _GEMINI_FILE_RE.search(p.name)
-    return m.group(1).lower() if m else None
-
-
-def _resolve_gemini_index(session_id: str) -> Optional[int]:
-    """Map our stable session_id (the file's hex suffix) to gemini's
-    current 1-based mtime index. Returns None if no matching file."""
-    sid = session_id.lower()
-    for i, f in enumerate(_gemini_chat_files(), start=1):
-        if (_gemini_id_from_filename(f) or "") == sid:
-            return i
     return None
 
 
@@ -806,111 +763,6 @@ async def ask_codex(
     # If user passed an explicit UUID and we couldn't extract one, keep theirs.
     if resolved_id is None and session_id and session_id != "last":
         resolved_id = session_id
-
-    return {"output": stdout.strip(), "session_id": resolved_id}
-
-
-@mcp.tool()
-async def ask_gemini(
-    prompt: str,
-    model: str = "gemini-3.1-pro-preview",
-    cwd: Optional[str] = None,
-    approval_mode: str = "yolo",
-    timeout_sec: int = 600,
-    session_id: Optional[str] = None,
-    ctx: Optional[Context] = None,
-) -> dict:
-    """Run a prompt through the Google Gemini CLI as an agentic subagent.
-
-    Continuity: this tool returns a session_id. To continue the same
-    Gemini conversation on a follow-up call, you MUST pass that
-    session_id back. Omitting it starts a fresh agent that has no
-    memory of prior turns. Only start fresh when the work is unrelated.
-
-    Args:
-        prompt: Task description for Gemini.
-        model: Gemini model id. Default: "gemini-3.1-pro-preview"
-            (Gemini 3.1 Pro — preview status, not stable; latest
-            advanced reasoning + agentic-coding tier). Override per
-            call when needed:
-              - "gemini-2.5-pro" — stable, no preview-rotation risk
-              - "gemini-3-flash-preview" — cheaper, frontier-class
-              - "gemini-3.1-flash-lite-preview" — efficiency variant
-              - "gemini-3.1-flash-live-preview" — real-time / voice
-            Preview ids are rotated by Google on quarterly cadence
-            (-preview → -001 → deprecated); revisit if pinning here
-            starts trailing the published preview id.
-        cwd: Working directory. Defaults to the MCP server's CWD.
-        approval_mode: One of "default", "auto_edit", "yolo", "plan".
-            Must be non-"default" — subprocess cannot answer interactive
-            prompts. "yolo" auto-approves all tools, "plan" is read-only.
-        timeout_sec: Hard kill after this many seconds. Default 10 minutes.
-        session_id: Conversation continuity.
-            - None: start a fresh session. The new id is returned.
-            - "last": resume the most recent session (gemini -r latest).
-            - any hex id previously returned by this tool: resume that
-              exact chat. The server resolves it to gemini's current
-              session index by scanning ~/.gemini/tmp/<user>/chats/.
-
-    Returns:
-        {"output": str, "session_id": str | None}
-        session_id is the hex suffix of gemini's chat file. Stash it;
-        pass it back on the next call to keep the same conversation.
-
-    Note: Gemini's CLI resumes by mtime-ordered index, not by stable id.
-    The stability of session_id therefore depends on the chat file
-    surviving on disk; if the user clears chat history, ids become invalid.
-
-    Practical output budget: Gemini 3.1 Pro Preview is thinking-mode;
-    bulk single-call outputs above ~32K visible tokens are unverified.
-    For large structured work, prefer per-section fragmentation. Bulk
-    fan-out (single-call >10K output) lands more reliably on ask_grok
-    with grok-4.20-reasoning until Gemini's bulk-output ceiling is
-    empirically pinned down.
-    """
-    if approval_mode == "default":
-        raise RuntimeError(
-            "approval_mode='default' would block on interactive prompts. "
-            "Use 'yolo', 'auto_edit', or 'plan'."
-        )
-
-    args = [
-        "gemini",
-        "-p", prompt,
-        f"--approval-mode={approval_mode}",
-        "--output-format=text",
-    ]
-    if model:
-        args.extend(["-m", model])
-
-    target_known_id: Optional[str] = None
-    if session_id is not None:
-        if session_id == "last":
-            args.extend(["-r", "latest"])
-        else:
-            idx = _resolve_gemini_index(session_id)
-            if idx is None:
-                raise RuntimeError(
-                    f"gemini session_id '{session_id}' not found in "
-                    f"~/.gemini/tmp/<user>/chats/. Pass 'last' or omit "
-                    f"to start fresh."
-                )
-            target_known_id = session_id
-            args.extend(["-r", str(idx)])
-
-    chats_before = {p.name for p in _gemini_chat_files()}
-    async with _heartbeat_context(ctx, "gemini", model):
-        stdout, _ = await _run_subprocess(args, timeout_sec=timeout_sec, cwd=cwd)
-
-    # Resolve the resulting session_id.
-    if target_known_id is not None:
-        # Resume kept the same file → id is stable.
-        resolved_id: Optional[str] = target_known_id
-    else:
-        after = _gemini_chat_files()
-        new_files = [p for p in after if p.name not in chats_before]
-        chosen = new_files[0] if new_files else (after[0] if after else None)
-        resolved_id = _gemini_id_from_filename(chosen) if chosen else None
 
     return {"output": stdout.strip(), "session_id": resolved_id}
 
