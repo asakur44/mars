@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unconfigured.
 - Context-window hints and `list/delete_api_session` provider support for
   the `mimo` and `kimi` providers.
+- **Kimi K3 is now the default Moonshot model** (2026-07-18). `ask_kimi`
+  defaults to `kimi-k3` and `ask_openrouter` to `moonshotai/kimi-k3`,
+  superseding `kimi-k2.6`. Both ids validated live on their routes;
+  context-window and practical-output-ceiling hints added for k3. Pass
+  the older `kimi-k2.6` / `moonshotai/kimi-k2.6` ids explicitly to fall
+  back.
 
 ### Removed
 

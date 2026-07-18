@@ -108,7 +108,7 @@ ask_codex(prompt="now write tests for it", session_id=sid)
 
 All six chat subagents have explicit string defaults — no "depends on local CLI" footnotes. Override per call when you want something else.
 
-`ask_openrouter` defaults to `moonshotai/kimi-k2.6` (Moonshot AI Kimi 2.6, 256K context, thinking-mode). Override:
+`ask_openrouter` defaults to `moonshotai/kimi-k3` (Moonshot AI Kimi K3, current frontier; set 2026-07-18, superseding kimi-k2.6). Override:
 
 ```python
 ask_openrouter(prompt="...", model="deepseek/deepseek-v4-pro")    # 1M ctx, ~5× cheaper on output
@@ -250,7 +250,7 @@ Runs the Codex CLI's full agent loop (read files, edit, run shell commands) insi
 
 Stateless API calls + local session replay.
 
-- `model`: default `"moonshotai/kimi-k2.6"` (Moonshot AI Kimi 2.6; 256K context; thinking-mode). Pass any [OpenRouter model id](https://openrouter.ai/models) to override.
+- `model`: default `"moonshotai/kimi-k3"` (Moonshot AI Kimi K3; current frontier, set 2026-07-18, superseding kimi-k2.6). Pass any [OpenRouter model id](https://openrouter.ai/models) to override.
 - `max_tokens`: default `100000` — effectively no-cap; OpenRouter clamps to per-model `max_completion_tokens` server-side. The cap is a ceiling, not a charge.
 - `system`: optional system prompt (used only on fresh sessions)
 - `session_id`: pass `None` for fresh, or a UUID from a previous call
@@ -340,6 +340,7 @@ Empirically observed:
 | `grok-4-1-fast-reasoning` | ~60K | ✓ Holds. |
 | `deepseek-v4-flash` | ~64K | ✓ Generally holds (non-thinking). |
 | `deepseek-v4-pro` | ~32K | △ Thinking-mode reserves significant budget for internal reasoning; bulk above ~32K can degrade. |
+| `moonshotai/kimi-k3` | ~32K | △ Treat conservatively — bulk-fanout limit unverified (default since 2026-07-18). |
 | `moonshotai/kimi-k2.6` | ~32K | △ Treat conservatively — bulk-fanout limit unverified beyond small calls. |
 | `glm-5.1` (and the GLM family) | **~16K** | **✗ Fails.** Z.AI gateway truncates / 504s on bulk-output requests. Empirical pattern that works on GLM: per-table fragmentation (5–10 per-section calls of ~4K output each), assembled client-side. |
 

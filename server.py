@@ -386,6 +386,7 @@ _MODEL_CONTEXT_HINT = {
     "deepseek/deepseek-v4-pro": 1_000_000,
     "deepseek/deepseek-v4-flash": 1_000_000,
     # Moonshot AI / Kimi via OpenRouter (added 2026-04-28)
+    "moonshotai/kimi-k3": 256_000,  # current flagship (default set 2026-07-18)
     "moonshotai/kimi-k2.6": 256_000,
     "moonshotai/kimi-k2.5": 262_000,
     "moonshotai/kimi-latest": 262_000,
@@ -416,6 +417,7 @@ _MODEL_CONTEXT_HINT = {
     "glm-4.6": 128_000,
     "glm-4.5": 128_000,
     # Kimi / Moonshot direct — api.moonshot.ai, api.kimi.com/coding (added 2026-05-23)
+    "kimi-k3": 262_000,  # current flagship (default set 2026-07-18)
     "kimi-k2.6": 262_000,
     "kimi-k2.5": 262_000,
     "kimi-k2": 262_000,
@@ -493,6 +495,7 @@ _MODEL_PRACTICAL_OUTPUT_CEILING = {
     # Moonshot Kimi via OpenRouter — thinking-mode; treat conservatively
     # pending bulk-fanout evidence (we've only verified small calls
     # work cleanly).
+    "moonshotai/kimi-k3": 32_000,
     "moonshotai/kimi-k2.6": 32_000,
     "moonshotai/kimi-k2.5": 32_000,
     "moonshotai/kimi-latest": 32_000,
@@ -770,7 +773,7 @@ async def ask_codex(
 @mcp.tool()
 async def ask_openrouter(
     prompt: str,
-    model: str = "moonshotai/kimi-k2.6",
+    model: str = "moonshotai/kimi-k3",
     system: Optional[str] = None,
     max_tokens: int = 100000,
     session_id: Optional[str] = None,
@@ -785,17 +788,18 @@ async def ask_openrouter(
 
     Args:
         prompt: User message.
-        model: OpenRouter model id. Default: "moonshotai/kimi-k2.6"
-            (Moonshot AI Kimi 2.6, released 2026-04-20; 256K context;
-            $0.7448/$4.655 per M tokens in/out; thinking-mode).
-            Common alternatives:
+        model: OpenRouter model id. Default: "moonshotai/kimi-k3"
+            (Moonshot AI Kimi K3, current frontier; set as the default
+            2026-07-18, superseding kimi-k2.6). Common alternatives:
               - "deepseek/deepseek-v4-pro" — 1M context, ~5× cheaper
                 on output ($0.435/$0.87 with 75%-off through
                 2026-05-05; ~$1.74/$3.48 full price after); right
                 pick for cost-sensitive or long-context work
               - "moonshotai/kimi-latest" — auto-rolls to newest Kimi
-                (currently K2.6); use when you want to track latest
-                without manual id updates
+                (K3 as of 2026-07-18); prefer the pinned "moonshotai/kimi-k3"
+                id when you specifically want K3, since this alias moves
+              - "moonshotai/kimi-k2.6" — prior Kimi flagship
+                (2026-04-20; 256K ctx); fall back if k3 errors
               - "moonshotai/kimi-k2.5" — Jan 2026 Kimi; 262K ctx;
                 $0.44/$2.00 per M tokens (cheaper Kimi alternative)
               - "anthropic/claude-sonnet-4.6" — strong code + writing
@@ -1150,7 +1154,7 @@ async def ask_mimo(
 @mcp.tool()
 async def ask_kimi(
     prompt: str,
-    model: str = "kimi-k2.6",
+    model: str = "kimi-k3",
     system: Optional[str] = None,
     max_tokens: int = 100000,
     session_id: Optional[str] = None,
@@ -1163,9 +1167,12 @@ async def ask_kimi(
 
     Args:
         prompt: User message.
-        model: Kimi model id. Default: "kimi-k2.6" (Moonshot flagship,
-            served from the Open Platform endpoint https://api.moonshot.ai/v1,
-            billed per token). Other Moonshot ids: "kimi-k2.5",
+        model: Kimi model id. Default: "kimi-k3" (Moonshot flagship;
+            set as the default 2026-07-18, superseding kimi-k2.6 — fall
+            back to "kimi-k2.6" if k3 errors on a given call). Served
+            from the Open Platform endpoint https://api.moonshot.ai/v1,
+            billed per token. Other Moonshot ids: "kimi-k2.6",
+            "kimi-k2.5",
             "moonshot-v1-8k" / "moonshot-v1-32k" / "moonshot-v1-128k".
             Special: model="kimi-for-coding" routes to the Kimi Code
             *subscription* endpoint (https://api.kimi.com/coding/v1) and
@@ -1187,12 +1194,12 @@ async def ask_kimi(
         # Dormant route: the Kimi Code *subscription* endpoint. Only usable if
         # the operator has explicitly provisioned a Kimi Code Console key.
         # Guarded so it never silently misroutes during normal operation —
-        # the working/default route is Moonshot + kimi-k2.6 below.
+        # the working/default route is Moonshot + kimi-k3 below.
         if not os.environ.get("KIMI_CODE_API_KEY"):
             raise RuntimeError(
                 "model='kimi-for-coding' targets the Kimi Code subscription "
                 "endpoint, which is NOT configured (KIMI_CODE_API_KEY unset). "
-                "Use the default model 'kimi-k2.6' (Moonshot Open Platform), "
+                "Use the default model 'kimi-k3' (Moonshot Open Platform), "
                 "which is the active route, or set KIMI_CODE_API_KEY first."
             )
         base_url = "https://api.kimi.com/coding/v1"
