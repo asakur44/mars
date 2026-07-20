@@ -318,8 +318,64 @@ async def _heartbeat_context(
             pass
 
 
-def _require_env(var: str) -> str:
+# Shape of an env value the MCP host failed to expand: ${NAME} or
+# ${NAME:-default}. Claude Code expands these in the server's `env` block
+# on initial launch, but its MCP *reconnect* path has been observed passing
+# the literal placeholder through (claude.exe 2.1.118, 2026-07-20 — same
+# parent process, same config: 00:54 spawn expanded, 01:15 respawn did not).
+_PLACEHOLDER_RE = re.compile(r"^\$\{(?P<name>\w+)(?::-(?P<default>[^}]*))?\}$")
+
+
+def _registry_env(var: str) -> Optional[str]:
+    """Read a persistent env var from the Windows registry (user scope
+    first, then machine scope). Unlike the process environment — frozen
+    at spawn time and corruptible by an unexpanded placeholder — the
+    registry value is always current. Returns None off-Windows.
+    """
+    if sys.platform != "win32":
+        return None
+    import winreg
+
+    for hive, subkey in (
+        (winreg.HKEY_CURRENT_USER, "Environment"),
+        (
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        ),
+    ):
+        try:
+            with winreg.OpenKey(hive, subkey) as key:
+                val, _ = winreg.QueryValueEx(key, var)
+        except OSError:
+            continue
+        if val:
+            return str(val)
+    return None
+
+
+def _optional_env(var: str) -> Optional[str]:
+    """os.environ lookup that survives an unexpanded ${VAR} placeholder.
+
+    If the process env holds a literal placeholder (or nothing), fall back
+    to the OS-scope value so one bad spawn doesn't take the tool down for
+    the life of the server process.
+    """
     val = os.environ.get(var)
+    if not val:
+        return _registry_env(var)
+    m = _PLACEHOLDER_RE.match(val)
+    if m is None:
+        return val
+    name = m.group("name")
+    if name != var:
+        ref = os.environ.get(name)
+        if ref and not _PLACEHOLDER_RE.match(ref):
+            return ref
+    return _registry_env(name) or _registry_env(var) or m.group("default")
+
+
+def _require_env(var: str) -> str:
+    val = _optional_env(var)
     if not val:
         raise RuntimeError(
             f"{var} is not set. Add it to the MCP server env in your "
@@ -1195,7 +1251,8 @@ async def ask_kimi(
         # the operator has explicitly provisioned a Kimi Code Console key.
         # Guarded so it never silently misroutes during normal operation —
         # the working/default route is Moonshot + kimi-k3 below.
-        if not os.environ.get("KIMI_CODE_API_KEY"):
+        kimi_code_key = _optional_env("KIMI_CODE_API_KEY")
+        if not kimi_code_key:
             raise RuntimeError(
                 "model='kimi-for-coding' targets the Kimi Code subscription "
                 "endpoint, which is NOT configured (KIMI_CODE_API_KEY unset). "
@@ -1203,7 +1260,7 @@ async def ask_kimi(
                 "which is the active route, or set KIMI_CODE_API_KEY first."
             )
         base_url = "https://api.kimi.com/coding/v1"
-        api_key = os.environ["KIMI_CODE_API_KEY"]
+        api_key = kimi_code_key
     else:
         # Default / active route: Moonshot Open Platform (api.moonshot.ai),
         # authenticated by KIMI_API_KEY. This is the only configured path.

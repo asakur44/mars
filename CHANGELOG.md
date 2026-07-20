@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **API-key env vars now survive an MCP host that fails to expand
+  `${VAR}` placeholders.** Claude Code expands `${VAR}` references in the
+  server's `env` block on initial launch, but its MCP *reconnect* path was
+  observed passing the literal placeholder through unexpanded
+  (claude.exe 2.1.118, 2026-07-20: same parent process and config — the
+  session-start spawn got real values, the reconnect respawn got literal
+  `${DEEPSEEK_API_KEY}` etc., producing 401s on every API-key route while
+  CLI-OAuth routes kept working). `_require_env` (and the
+  `KIMI_CODE_API_KEY` path) now detects unset or `${VAR}` /
+  `${VAR:-default}`-shaped values and falls back to the persistent OS
+  user/machine environment (Windows registry), which is always current
+  even when the process env is stale or corrupted. Off-Windows the
+  fallback is a no-op and behavior is unchanged.
+
 ### Added
 
 - **`ask_mimo`** — chat-completion backend for the Xiaomi MiMo API
