@@ -96,7 +96,7 @@ r2 = ask_deepseek(prompt="now critique it", session_id=sid)   # remembers turn 1
 r3 = ask_deepseek(prompt="rewrite for postgres", session_id=sid)  # remembers 1 & 2
 ```
 
-For Codex/Gemini (agentic CLIs):
+For Codex (agentic CLI):
 
 ```python
 r1 = ask_codex(prompt="implement parser in src/parser.py", cwd="/path/to/project")
@@ -389,14 +389,13 @@ Even with the engineered fixes, four orchestration patterns remain caller-side:
 
 ## Limitations / known issues
 
-- **No streaming.** Tools return final text only. Codex/Gemini agent loops can take minutes; you won't see partial output.
+- **No streaming.** Tools return final text only. Codex/Antigravity (`agy`) agent loops can take minutes; you won't see partial output.
 - **No image input** for `ask_codex` (CLI supports `-i`; not exposed yet).
 - **DeepSeek/OpenRouter/Grok/Z.AI token cost grows linearly per turn** — full history is resent each call. DeepSeek's context caching offsets repeat-prefix cost; OpenRouter pass-through depends on the underlying provider; xAI's caching policy varies by model; Z.AI doesn't currently surface a caching parameter on `paas/v4`.
 - **Thinking-mode models can hit `max_tokens` invisibly** if you set the cap too low — the model spends 2–6K tokens on internal reasoning before producing visible output, so `max_tokens=4096` will silently truncate real work. The `100000` default avoids this; budget at least 16K if you override.
 - **MCP progress notifications are best-effort.** Heartbeats emit via the standard MCP `notifications/progress` channel; clients that don't understand them silently ignore. There's an open issue ([modelcontextprotocol/python-sdk#953](https://github.com/modelcontextprotocol/python-sdk/issues/953)) on streamable-HTTP transport — if your MCP client uses streamable-HTTP, verify heartbeats reach the watchdog before relying on them. Stdio transport (Claude Code's default) is unaffected.
-- **Gemini IDs are not natively stable.** The CLI resumes by mtime-ordered index; we rebuild stability by scanning the chat dir. If the user clears history, IDs become invalid.
 - **Z.AI key format quirk:** keys are `id.secret` and require client-side JWT signing. The tool handles this internally; do NOT pre-sign or pass a JWT as `ZAI_API_KEY`.
-- **Windows + npm shim quirk:** the server resolves CLI paths via `shutil.which()` and explicitly closes stdin to `DEVNULL` to avoid documented hangs in `codex exec` and `gemini -p` when run as a subprocess.
+- **Windows + npm shim quirk:** the server resolves CLI paths via `shutil.which()` and explicitly closes stdin to `DEVNULL` to avoid documented hangs in `codex exec` when run as a subprocess (the same class of bug the removed `gemini` CLI had).
 
 ---
 

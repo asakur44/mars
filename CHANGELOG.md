@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   intro backend count/table and tool-count line, added an `ask_agy`
   Prerequisites blurb, and fixed the Install section's stale
   PyJWT-only dependency claim (see the `pyproject.toml` fix above).
+- **Purged stale Gemini-CLI references from the README.** The multi-turn
+  continuity example header, the no-streaming limitation, and the
+  npm-shim quirk still described the removed `ask_gemini` backend as
+  active, and the 'Gemini IDs are not natively stable' limitation
+  bullet described session handling for a tool that no longer exists.
+  Cleaned up; the intentional strikethrough removal notice in
+  Prerequisites stays.
 
 - **API-key env vars now survive an MCP host that fails to expand
   `${VAR}` placeholders.** Claude Code expands `${VAR}` references in the
