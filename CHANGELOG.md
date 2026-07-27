@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`pyproject.toml` was missing two runtime dependencies that the
+  PEP 723 inline metadata at the top of `server.py` already declared.**
+  `pyjwt>=2.0.0` (needed by `ask_zai`'s JWT signing) and
+  `pywinpty==2.0.14; sys_platform == 'win32'` (needed by the `ask_agy`
+  ConPTY helper) are now listed in `[project] dependencies`, so
+  `pip install .` pulls in everything `uv run server.py` already got
+  from the inline metadata. Closes the `pyjwt` gap self-flagged in the
+  Notes section below, and fixes the same-shaped `pywinpty` gap that
+  was never flagged.
+- **README documentation catch-up for `ask_mimo` / `ask_kimi` /
+  `ask_agy`.** Three of the server's eight chat subagent tools had no
+  `Tool reference` entries, the intro table only listed seven backends
+  and omitted `ask_agy` entirely, and the `list_api_sessions` /
+  `delete_api_session` reference text hadn't caught up to the
+  `mimo`/`kimi` provider support the `server.py` docstrings already
+  documented. Added `Tool reference` entries for all three, fixed the
+  intro backend count/table and tool-count line, added an `ask_agy`
+  Prerequisites blurb, and fixed the Install section's stale
+  PyJWT-only dependency claim (see the `pyproject.toml` fix above).
+
 - **API-key env vars now survive an MCP host that fails to expand
   `${VAR}` placeholders.** Claude Code expands `${VAR}` references in the
   server's `env` block on initial launch, but its MCP *reconnect* path was
@@ -43,6 +63,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   context-window and practical-output-ceiling hints added for k3. Pass
   the older `kimi-k2.6` / `moonshotai/kimi-k2.6` ids explicitly to fall
   back.
+
+### Changed
+
+- **`ask_zai` default model bumped `glm-5.1` → `glm-5.2`.** Recorded as
+  the operator's default on 2026-06-17 (Zhipu AI's current flagship,
+  superseding `glm-5.1`), but the server itself was never updated to
+  match until now. Pass `model="glm-5.1"` explicitly to keep the old
+  default. Added a conservative `glm-5.2` context-window hint (128K,
+  mirrors `glm-5.1`, pending z.ai per-model docs) to
+  `_MODEL_CONTEXT_HINT`. Updated the README's `ask_zai` default-model
+  mentions (Choosing a model, Tool reference) to match.
 
 ### Removed
 
@@ -123,10 +154,10 @@ removed thereafter:
   rename does not require a Python import-path deprecation shim.
   The deprecation surface is the console-script name, the env vars, the
   storage path, and the MCP server name.
-- pyproject.toml `pyjwt` dependency: `pyjwt>=2.0.0` is declared in the
-  PEP 723 inline metadata in `server.py` for `uv run`, but is not yet
-  in pyproject.toml's `[project] dependencies`. Pre-existing (predates
-  this rename); flagged for a separate fix.
+- pyproject.toml `pyjwt` dependency: was flagged here as pending a
+  separate fix — now fixed. See the **Fixed** entry above, which adds
+  both `pyjwt` and the same-shaped `pywinpty` gap to `[project]
+  dependencies`.
 
 ### External services (require separate action by the maintainer)
 

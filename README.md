@@ -4,7 +4,7 @@
 
 > **Renamed from ModelMesh on 2026-05-04.** The legacy `modelmesh` console command, `MODELMESH_*` env vars, and `~/.modelmesh/` storage path continue to work with a `DeprecationWarning` through MARS v0.2.0. See [CHANGELOG.md](./CHANGELOG.md) for the full migration path.
 
-Wraps seven backends:
+Wraps eight backends:
 
 | Tool | Backend | Auth |
 |---|---|---|
@@ -15,6 +15,7 @@ Wraps seven backends:
 | `ask_zai` | Z.AI (Zhipu) HTTPS API — JWT auth handled internally | `ZAI_API_KEY` env (legacy `id.secret` shape) |
 | `ask_mimo` | Xiaomi MiMo HTTPS API (Singapore plan) | `MIMO_API_KEY` env |
 | `ask_kimi` | Kimi / Moonshot AI HTTPS API (`api.moonshot.ai`; `kimi-for-coding` → Kimi Code subscription) | `KIMI_API_KEY` env (`KIMI_CODE_API_KEY` for the coding route) |
+| `ask_agy` | Local `agy` (Antigravity CLI) — Claude Opus/Sonnet 4.6 + Gemini, billed to Google AI Pro | `agy`'s own Google OAuth |
 
 Plus admin tools: `list_api_sessions`, `delete_api_session`.
 
@@ -32,13 +33,14 @@ MARS turns those LLMs into first-class tools Claude can call mid-conversation. E
 
 ### Prerequisites
 
-- Python 3.10+ (PyJWT is now a dependency — `pip install` handles it; `uv run` reads it from PEP 723 metadata)
+- Python 3.10+ (PyJWT and, on Windows, pywinpty are now dependencies — `pip install` handles both; `uv run` reads them from PEP 723 metadata)
 - For `ask_codex`: install and authenticate [Codex CLI](https://developers.openai.com/codex/cli) (`npm install -g @openai/codex` then `codex login`)
 - ~~For `ask_gemini`~~: **removed 2026-06-22** — Google discontinued the free Gemini Code Assist CLI tier. Reach Gemini models via `ask_agy` (Antigravity) instead.
 - For `ask_openrouter`: an [OpenRouter API key](https://openrouter.ai/settings/keys)
 - For `ask_deepseek`: a [DeepSeek API key](https://platform.deepseek.com/api_keys)
 - For `ask_grok`: an [xAI API key](https://console.x.ai/)
 - For `ask_zai`: a [Z.AI API key](https://platform.kimi.ai/) (legacy `id.secret` format — the tool generates the required JWT internally; do NOT pre-sign)
+- For `ask_agy`: install and authenticate the Antigravity CLI (`agy`) — run `agy` once in a real terminal to complete its own Google OAuth flow (billed to the Google AI Pro subscription, not per-token). Windows-only as implemented; the ConPTY helper's `pywinpty` dependency installs automatically via `pip install .` (see above)
 
 ### Install the server
 
@@ -50,7 +52,7 @@ pip install .
 
 This puts a `mars` console command on your PATH. (The legacy `modelmesh` console command is also installed for backwards compatibility through MARS v0.2.0.)
 
-(Alternative: if you have [`uv`](https://docs.astral.sh/uv/) installed, you can skip `pip install` and use `uv run server.py` — the inline PEP 723 metadata handles deps including `pyjwt>=2.0.0` for `ask_zai`.)
+(Alternative: if you have [`uv`](https://docs.astral.sh/uv/) installed, you can skip `pip install` and use `uv run server.py` — the inline PEP 723 metadata handles deps including `pyjwt>=2.0.0` for `ask_zai` and, on Windows, `pywinpty==2.0.14` for `ask_agy`.)
 
 ### Register with Claude Code
 
@@ -65,7 +67,7 @@ claude mcp add --scope user mars \
 
 `--scope user` makes it available across all your projects. Drop `--env` flags for any provider you don't have a key for; the corresponding tools will return a clean error when called instead of crashing the server.
 
-In Claude Code, run `/mcp` to confirm `mars` is connected. Eight tools should now be callable (six chat subagents + two admin tools).
+In Claude Code, run `/mcp` to confirm `mars` is connected. Ten tools should now be callable (eight chat subagents + two admin tools).
 
 ### Register with other MCP clients
 
@@ -133,9 +135,10 @@ ask_grok(prompt="...", model="grok-4-1-fast-reasoning")   # 10× cheaper, 2M ctx
 ask_grok(prompt="...", model="grok-code-fast-1")          # agentic coding (256K)
 ```
 
-`ask_zai` defaults to `glm-5.1` (Zhipu AI flagship; thinking-mode with separate `reasoning_content` stream like `deepseek-reasoner`). Other GLM variants:
+`ask_zai` defaults to `glm-5.2` (Zhipu AI flagship; thinking-mode with separate `reasoning_content` stream like `deepseek-reasoner`; set 2026-06-17, superseding `glm-5.1`). Other GLM variants:
 
 ```python
+ask_zai(prompt="...", model="glm-5.1")        # prior flagship
 ask_zai(prompt="...", model="glm-5-turbo")    # faster, lower latency
 ask_zai(prompt="...", model="glm-4.7")         # prior generation
 ```
@@ -271,15 +274,42 @@ History is replayed each call; oldest pairs are trimmed when context approaches 
 
 ### `ask_zai(prompt, model?, system?, max_tokens?, session_id?)`
 
-Z.AI (Zhipu AI) GLM API. Default model `glm-5.1` (flagship; thinking-mode with separate `reasoning_content` stream like `deepseek-reasoner`).
+Z.AI (Zhipu AI) GLM API. Default model `glm-5.2` (flagship; thinking-mode with separate `reasoning_content` stream like `deepseek-reasoner`; set 2026-06-17, superseding `glm-5.1`).
 
-- `model`: default `"glm-5.1"`. Other ids: `"glm-5"`, `"glm-5-turbo"` (faster), `"glm-5v-turbo"` (multimodal vision), `"glm-4.7"` / `"glm-4.7-flash"`, `"glm-4.6"`, `"glm-4.5"`.
-- `max_tokens`: default `100000`. GLM-5.1 is thinking-mode; budget generously (the model consumes ~70+ reasoning tokens even on trivial prompts).
+- `model`: default `"glm-5.2"`. Other ids: `"glm-5.1"` (prior flagship), `"glm-5"`, `"glm-5-turbo"` (faster), `"glm-5v-turbo"` (multimodal vision), `"glm-4.7"` / `"glm-4.7-flash"`, `"glm-4.6"`, `"glm-4.5"`.
+- `max_tokens`: default `100000`. GLM-5.2 is thinking-mode (like 5.1); budget generously.
 - **Auth note**: `ZAI_API_KEY` must be the legacy Zhipu `id.secret` format (32-char hex + `.` + alphanum secret). The tool generates an HS256-signed JWT per call internally before sending; raw-Bearer auth with the unsigned key fails on `paas/v4` with `"token expired or incorrect"` despite some docs implying it works. The official `z-ai-sdk-python` does this signing transparently; we do it explicitly.
+
+### `ask_mimo(prompt, model?, system?, max_tokens?, session_id?)`
+
+Xiaomi MiMo HTTPS API (Singapore plan), OpenAI-compatible `/v1` endpoint (`token-plan-sgp.xiaomimimo.com`).
+
+- `model`: default `"mimo-v2.5-pro"` (flagship). Other chat-capable ids: `"mimo-v2.5"` (non-Pro), `"mimo-v2-pro"` (previous-gen flagship), `"mimo-v2-omni"` (multimodal). The Singapore endpoint accepts only lowercase ids; any casing passed in is lowercased before forwarding. TTS models (`"mimo-v2.5-tts"` and variants) are NOT supported by this chat tool.
+- `max_tokens`: default `100000`.
+- **Auth**: `MIMO_API_KEY`.
+
+### `ask_kimi(prompt, model?, system?, max_tokens?, session_id?)`
+
+Kimi / Moonshot AI HTTPS API.
+
+- `model`: default `"kimi-k3"` (Moonshot flagship; set as the default 2026-07-18, superseding `kimi-k2.6` — pass `"kimi-k2.6"` explicitly to fall back if k3 errors). Served from the Open Platform endpoint (`api.moonshot.ai`), billed per token. Other ids: `"kimi-k2.6"`, `"kimi-k2.5"`, `"moonshot-v1-8k"` / `"moonshot-v1-32k"` / `"moonshot-v1-128k"`. Note: `kimi-k2.5`/`k2.6` only accept `temperature=1`; MARS never sends a `temperature` field, so the model's own default applies.
+- `model="kimi-for-coding"`: routes to the Kimi Code *subscription* endpoint (`api.kimi.com/coding`) instead of the Open Platform, and requires `KIMI_CODE_API_KEY` instead of `KIMI_API_KEY`. Guarded to error clearly rather than misroute when `KIMI_CODE_API_KEY` is unset.
+- `max_tokens`: default `100000`.
+- **Auth**: `KIMI_API_KEY` (Moonshot Open Platform console) for every model except `"kimi-for-coding"`, which uses `KIMI_CODE_API_KEY` (Kimi Code Console; tied to a Kimi membership, quota refreshes every 7 days).
+
+### `ask_agy(prompt, model?, cwd?, timeout_sec?, session_id?)`
+
+Runs a prompt through the Google Antigravity CLI (`agy`) — a panelist route to Claude Opus/Sonnet 4.6 (Thinking) and Gemini 3.5/3.1, billed to the Google AI Pro subscription instead of per-token APIs. Windows-only as implemented (uses a ConPTY helper via `pywinpty`, since `agy` blocks forever with zero output when stdio is a pipe).
+
+- `model`: default `"Claude Opus 4.6 (Thinking)"` — passed verbatim to `agy` (labels contain spaces/parens; keep them exact). Other labels (from `agy models`): `"Claude Sonnet 4.6 (Thinking)"`, `"Gemini 3.5 Flash (Low|Medium|High)"`, `"Gemini 3.1 Pro (Low|High)"`, `"GPT-OSS 120B (Medium)"`. Ignored on resume — `agy` locks the conversation to its original model.
+- `cwd`: working directory for `agy` (default: server's CWD). Must be a trusted workspace in `agy`'s `settings.json` (`trustedWorkspaces`), otherwise `agy` hangs on an interactive trust prompt until timeout.
+- `timeout_sec`: hard kill after this many seconds. Default `600` (10 min — thinking models can be slow to first token).
+- `session_id`: an `agy` conversation id. Pass `None` for a fresh conversation, or a UUID from a previous call to resume it.
+- **Auth**: `agy`'s own Google OAuth — no API key env var. If calls start timing out with empty output, re-auth by launching `agy` in a visible terminal.
 
 ### `list_api_sessions(provider?)`
 
-List stored DeepSeek / OpenRouter / Grok / Z.AI sessions, newest first. Filter by `"deepseek"`, `"openrouter"`, `"grok"`, or `"zai"`.
+List stored DeepSeek / OpenRouter / Grok / Z.AI / MiMo / Kimi sessions, newest first. Filter by `"deepseek"`, `"openrouter"`, `"grok"`, `"zai"`, `"mimo"`, or `"kimi"`. (`ask_agy` sessions live in `agy`'s own conversation store, not this session store, so `agy` isn't a filterable provider here.)
 
 ### `delete_api_session(session_id)`
 

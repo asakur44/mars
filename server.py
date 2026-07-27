@@ -464,6 +464,7 @@ _MODEL_CONTEXT_HINT = {
     "grok-4.20-multi-agent-0309": 256_000,
     # Zhipu z.ai GLM family (added 2026-04-29); conservative 128K hints
     # pending z.ai docs confirmation per model.
+    "glm-5.2": 128_000,  # mirrors glm-5.1; placeholder pending z.ai docs (default bumped 2026-07-20)
     "glm-5.1": 128_000,
     "glm-5": 128_000,
     "glm-5-turbo": 128_000,
@@ -1076,7 +1077,7 @@ def _zai_jwt_token(api_key: str, exp_seconds: int = 3600) -> str:
 @mcp.tool()
 async def ask_zai(
     prompt: str,
-    model: str = "glm-5.1",
+    model: str = "glm-5.2",
     system: Optional[str] = None,
     max_tokens: int = 100000,
     session_id: Optional[str] = None,
@@ -1091,13 +1092,16 @@ async def ask_zai(
 
     Args:
         prompt: User message.
-        model: z.ai model id. Default: "glm-5.1" (Zhipu AI flagship for
+        model: z.ai model id. Default: "glm-5.2" (Zhipu AI flagship for
             coding + agent tasks; thinking-mode with separate
             reasoning_content stream — internal reasoning is NOT stored
             in session history; only the final assistant message is
             retained, mirroring DeepSeek V4-Pro and the deepseek-reasoner
-            legacy alias).
+            legacy alias. Set as the default 2026-06-17, superseding
+            "glm-5.1" — fall back to "glm-5.1" if 5.2 errors on a given
+            call).
             Other choices:
+              - "glm-5.1" — prior flagship (superseded 2026-06-17)
               - "glm-5" — base GLM-5 without 5.1 refinements
               - "glm-5-turbo" — faster, lower latency variant
               - "glm-5v-turbo" — multimodal vision variant
@@ -1106,12 +1110,11 @@ async def ask_zai(
             On resume the model is locked to whatever was used originally
             and this argument is ignored.
         system: Optional system prompt. Used only on a fresh session.
-        max_tokens: Cap on response tokens for this turn. GLM-5.1 is
-            thinking-mode and consumes tokens on internal reasoning
-            before producing visible output (~70 reasoning tokens even
-            for trivial prompts), so budget generously — the 100000
-            default is effectively no-cap for any single response GLM
-            will actually generate.
+        max_tokens: Cap on response tokens for this turn. GLM-5.2 is
+            thinking-mode (like 5.1) and consumes tokens on internal
+            reasoning before producing visible output, so budget
+            generously — the 100000 default is effectively no-cap for
+            any single response GLM will actually generate.
         session_id: Pass None to start a new session (returns a UUID), or
             a UUID from a previous call to continue that conversation.
             History is replayed each call; oldest turns are trimmed when
