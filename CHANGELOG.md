@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`ask_kimi` rerouted from the Moonshot HTTPS API to the local
+  `kimi` Kimi Code CLI** (`@moonshot-ai/kimi-code`, verified on
+  0.31.1). Billing moves from per-token `KIMI_API_KEY`
+  (api.moonshot.ai) to the Kimi Code *subscription* (CLI OAuth via
+  `kimi login`; quota refreshes weekly), and the tool gains the CLI's
+  full agent loop (read/write files, shell in `cwd`, Moonshot web
+  search/fetch — no sandbox; print mode auto-approves tool calls).
+  Signature: `max_tokens` dropped (no CLI equivalent); `cwd` and
+  `timeout_sec` (default 600s) added; `system` is now folded into the
+  prompt as a `<system>` preamble on fresh sessions. Default model is
+  the CLI alias `"kimi-code/k3"` (K3 flagship, 1M context, thinking —
+  continues the K3 default set 2026-07-18); other aliases:
+  `"kimi-code/k3-256k"`, `"kimi-code/kimi-for-coding"` (K2.7),
+  `"kimi-code/kimi-for-coding-highspeed"`. Session ids are now kimi's
+  own `"session_<uuid>"` form (stored under `~/.kimi-code/sessions`,
+  parsed from the stream-json `session.resume_hint` meta event);
+  legacy API-era kimi sessions in `~/.mars/api-sessions/` are no
+  longer resumable, though `list_api_sessions` / `delete_api_session`
+  still see them for cleanup. `KIMI_API_KEY` / `KIMI_CODE_API_KEY` are
+  no longer read, and the direct-Kimi entries in
+  `_MODEL_CONTEXT_HINT` were removed (the CLI manages its own
+  context; `moonshotai/*` OpenRouter entries remain for
+  `ask_openrouter`). Transport workaround baked in: the CLI mangles
+  any `-p` argument containing a newline on Windows (drops the prompt
+  and prints its idle greeting), so multi-line prompts — and prompts
+  over `KIMI_BRIEF_THRESHOLD` chars (default 20000; Windows
+  CreateProcess caps command lines at ~32K) — are written to a temp
+  disk brief the agent reads back. End-to-end verified: fresh session
+  with `<system>` fold + multi-line prompt, and resume with context
+  retention and stable session id.
+
 ### Fixed
 
 - **`pyproject.toml` was missing two runtime dependencies that the

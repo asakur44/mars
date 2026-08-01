@@ -14,7 +14,7 @@ Wraps eight backends:
 | `ask_grok` | xAI Grok HTTPS API | `XAI_API_KEY` env |
 | `ask_zai` | Z.AI (Zhipu) HTTPS API — JWT auth handled internally | `ZAI_API_KEY` env (legacy `id.secret` shape) |
 | `ask_mimo` | Xiaomi MiMo HTTPS API (Singapore plan) | `MIMO_API_KEY` env |
-| `ask_kimi` | Kimi / Moonshot AI HTTPS API (`api.moonshot.ai`; `kimi-for-coding` → Kimi Code subscription) | `KIMI_API_KEY` env (`KIMI_CODE_API_KEY` for the coding route) |
+| `ask_kimi` | Local [`kimi`](https://moonshotai.github.io/kimi-code/) Kimi Code CLI (full agent loop; K3/K2.7 on the Kimi Code subscription) | `kimi login` (OAuth) |
 | `ask_agy` | Local `agy` (Antigravity CLI) — Claude Opus/Sonnet 4.6 + Gemini, billed to Google AI Pro | `agy`'s own Google OAuth |
 
 Plus admin tools: `list_api_sessions`, `delete_api_session`.
@@ -25,7 +25,7 @@ Plus admin tools: `list_api_sessions`, `delete_api_session`.
 
 Claude Code is great, but sometimes you want a second opinion from GPT-5.5, or to delegate a long task to Kimi's long-context model, or to run cheap reasoning on DeepSeek-V4-Flash, or to triangulate against Z.AI's GLM-5.2. Doing this by hand — switching tools, copy-pasting context, losing thread — is friction.
 
-MARS turns those LLMs into first-class tools Claude can call mid-conversation. Each call returns a `session_id` you can pass back on the next call to keep the conversation going. Codex sessions persist in its own native store; DeepSeek/OpenRouter/Grok/Z.AI conversations are kept in a local JSON store and replayed on each call.
+MARS turns those LLMs into first-class tools Claude can call mid-conversation. Each call returns a `session_id` you can pass back on the next call to keep the conversation going. Codex, agy, and kimi sessions persist in their CLIs' own native stores; DeepSeek/OpenRouter/Grok/Z.AI/MiMo conversations are kept in a local JSON store and replayed on each call.
 
 ---
 
@@ -41,6 +41,7 @@ MARS turns those LLMs into first-class tools Claude can call mid-conversation. E
 - For `ask_grok`: an [xAI API key](https://console.x.ai/)
 - For `ask_zai`: a [Z.AI API key](https://platform.kimi.ai/) (legacy `id.secret` format — the tool generates the required JWT internally; do NOT pre-sign)
 - For `ask_agy`: install and authenticate the Antigravity CLI (`agy`) — run `agy` once in a real terminal to complete its own Google OAuth flow (billed to the Google AI Pro subscription, not per-token). Windows-only as implemented; the ConPTY helper's `pywinpty` dependency installs automatically via `pip install .` (see above)
+- For `ask_kimi`: install and authenticate the [Kimi Code CLI](https://moonshotai.github.io/kimi-code/) (`npm install -g @moonshot-ai/kimi-code` then `kimi login`; billed to the Kimi Code subscription, quota refreshes weekly)
 
 ### Install the server
 
@@ -227,9 +228,8 @@ All optional. Set in the `--env` flags when registering, or in your shell enviro
 | `XAI_API_KEY` | xAI Grok API key | required for `ask_grok` |
 | `ZAI_API_KEY` | Z.AI (Zhipu) API key in legacy `id.secret` format — tool generates JWT internally | required for `ask_zai` |
 | `MIMO_API_KEY` | Xiaomi MiMo API key (Singapore plan) | required for `ask_mimo` |
-| `KIMI_API_KEY` | Kimi / Moonshot Open Platform API key (`api.moonshot.ai`) | required for `ask_kimi` |
-| `KIMI_CODE_API_KEY` | Kimi Code Console key — only for `ask_kimi(model="kimi-for-coding")` | optional |
 | `MARS_DIR` | Where to store API session files | `~/.mars/` |
+| `KIMI_BRIEF_THRESHOLD` | Prompt length (chars) above which `ask_kimi` routes through a disk brief (multi-line prompts always do) | `20000` |
 | `MARS_HEARTBEAT_INTERVAL_SEC` | Progress-heartbeat interval (seconds) | `30` |
 | `OPENROUTER_REFERER` | `HTTP-Referer` header sent to OpenRouter (analytics attribution) | omitted |
 | `OPENROUTER_TITLE` | `X-Title` header sent to OpenRouter | omitted |
@@ -288,14 +288,17 @@ Xiaomi MiMo HTTPS API (Singapore plan), OpenAI-compatible `/v1` endpoint (`token
 - `max_tokens`: default `100000`.
 - **Auth**: `MIMO_API_KEY`.
 
-### `ask_kimi(prompt, model?, system?, max_tokens?, session_id?)`
+### `ask_kimi(prompt, model?, system?, cwd?, timeout_sec?, session_id?)`
 
-Kimi / Moonshot AI HTTPS API.
+Runs the Kimi Code CLI's full agent loop (read/write files, run shell commands in `cwd`, Moonshot web search/fetch). **Rerouted 2026-08-01** from the Moonshot HTTPS API to the local `kimi` CLI — billing moved from per-token `KIMI_API_KEY` to the Kimi Code subscription (OAuth via `kimi login`, quota refreshes weekly). No sandbox: print mode auto-approves tool calls (observed on CLI 0.31.1).
 
-- `model`: default `"kimi-k3"` (Moonshot flagship; set as the default 2026-07-18, superseding `kimi-k2.6` — pass `"kimi-k2.6"` explicitly to fall back if k3 errors). Served from the Open Platform endpoint (`api.moonshot.ai`), billed per token. Other ids: `"kimi-k2.6"`, `"kimi-k2.5"`, `"moonshot-v1-8k"` / `"moonshot-v1-32k"` / `"moonshot-v1-128k"`. Note: `kimi-k2.5`/`k2.6` only accept `temperature=1`; MARS never sends a `temperature` field, so the model's own default applies.
-- `model="kimi-for-coding"`: routes to the Kimi Code *subscription* endpoint (`api.kimi.com/coding`) instead of the Open Platform, and requires `KIMI_CODE_API_KEY` instead of `KIMI_API_KEY`. Guarded to error clearly rather than misroute when `KIMI_CODE_API_KEY` is unset.
-- `max_tokens`: default `100000`.
-- **Auth**: `KIMI_API_KEY` (Moonshot Open Platform console) for every model except `"kimi-for-coding"`, which uses `KIMI_CODE_API_KEY` (Kimi Code Console; tied to a Kimi membership, quota refreshes every 7 days).
+- `model`: default `"kimi-code/k3"` (K3 flagship, 1M context, thinking; continues the K3 default set 2026-07-18). Other aliases from `~/.kimi-code/config.toml`: `"kimi-code/k3-256k"`, `"kimi-code/kimi-for-coding"` (K2.7 Coding — the CLI's own default), `"kimi-code/kimi-for-coding-highspeed"`. Composable with resume (`-S` + `-m` verified on 0.31.1).
+- `system`: optional system prompt — folded into the prompt as a `<system>` preamble on fresh sessions (the CLI has no system-prompt flag); ignored on resume.
+- `cwd`: workspace directory for the agent loop (default: server's CWD).
+- `timeout_sec`: hard kill after this many seconds. Default `600` (K3 thinking at its default high effort can be slow).
+- `session_id`: kimi's own `"session_<uuid>"` form, stored under `~/.kimi-code/sessions`. Pass `None` for fresh, or a prior id to resume. Legacy API-era kimi sessions (bare UUIDs in `~/.mars/api-sessions/`) are **not** resumable here.
+- **Transport note**: multi-line or >20K-char prompts are written to a temp disk brief the CLI reads back (the CLI mangles newlines in `-p` argv on Windows); tune the length threshold with `KIMI_BRIEF_THRESHOLD`.
+- **Auth**: the CLI's own OAuth (`kimi login` device-code flow). `KIMI_API_KEY` / `KIMI_CODE_API_KEY` are no longer read.
 
 ### `ask_agy(prompt, model?, cwd?, timeout_sec?, session_id?)`
 
@@ -309,7 +312,7 @@ Runs a prompt through the Google Antigravity CLI (`agy`) — a panelist route to
 
 ### `list_api_sessions(provider?)`
 
-List stored DeepSeek / OpenRouter / Grok / Z.AI / MiMo / Kimi sessions, newest first. Filter by `"deepseek"`, `"openrouter"`, `"grok"`, `"zai"`, `"mimo"`, or `"kimi"`. (`ask_agy` sessions live in `agy`'s own conversation store, not this session store, so `agy` isn't a filterable provider here.)
+List stored DeepSeek / OpenRouter / Grok / Z.AI / MiMo sessions, newest first. Filter by `"deepseek"`, `"openrouter"`, `"grok"`, `"zai"`, `"mimo"`, or `"kimi"` (legacy API-era sessions only — since 2026-08-01 `ask_kimi` routes through the kimi CLI, whose sessions live in `~/.kimi-code` and don't appear here). (`ask_codex`, `ask_agy`, and `ask_kimi` sessions live in their CLIs' own stores, so they aren't managed by this tool.)
 
 ### `delete_api_session(session_id)`
 

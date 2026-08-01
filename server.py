@@ -27,15 +27,19 @@ Exposes eight subagent tools to any MCP client (Claude Code, Cursor, etc.):
   - ask_grok      -> chat completion via xAI Grok API (multi-turn supported)
   - ask_zai       -> chat completion via z.ai (Zhipu) GLM API (multi-turn supported)
   - ask_mimo      -> chat completion via Xiaomi MiMo API (multi-turn supported)
-  - ask_kimi      -> chat completion via Kimi / Moonshot AI (multi-turn supported)
+  - ask_kimi      -> wraps the local `kimi` Kimi Code CLI (agentic loop;
+                     Moonshot K3/K2.7 on the Kimi Code subscription).
+                     Rerouted 2026-08-01 from the Moonshot HTTPS API.
 
 Plus admin tools:
-  - list_api_sessions  -> enumerate stored DeepSeek/OpenRouter/Grok/z.ai/mimo/kimi sessions
+  - list_api_sessions  -> enumerate stored DeepSeek/OpenRouter/Grok/z.ai/mimo
+                          sessions (+ legacy API-era kimi sessions)
   - delete_api_session -> drop a stored session
 
-Codex/agy inherit auth from their own CLIs (`codex login`,
-`agy` interactive Google OAuth). ask_agy additionally needs
-pywinpty==2.0.14 (agy demands a real console; see _agy_pty_run).
+Codex/agy/kimi inherit auth from their own CLIs (`codex login`,
+`agy` interactive Google OAuth, `kimi login` device-code flow).
+ask_agy additionally needs pywinpty==2.0.14 (agy demands a real
+console; see _agy_pty_run).
 API tools read keys from env:
   - OPENROUTER_API_KEY for ask_openrouter
   - DEEPSEEK_API_KEY   for ask_deepseek
@@ -43,14 +47,12 @@ API tools read keys from env:
   - ZAI_API_KEY        for ask_zai (legacy "id.secret" format; tool generates
                                     JWT per call, do NOT pre-sign)
   - MIMO_API_KEY       for ask_mimo (Xiaomi MiMo Singapore plan)
-  - KIMI_API_KEY       for ask_kimi (Moonshot Open Platform, api.moonshot.ai)
-  - KIMI_CODE_API_KEY  for ask_kimi when model="kimi-for-coding" (Kimi Code
-                                    subscription, api.kimi.com/coding)
 
 All eight chat tools return: {"output": str, "session_id": str | None}.
 
-Codex sessions live where the CLI puts them (codex sqlite).
-DeepSeek / OpenRouter / Grok / z.ai / mimo / kimi sessions live in
+Codex sessions live where the CLI puts them (codex sqlite); kimi
+sessions live in the CLI's own store (~/.kimi-code/sessions).
+DeepSeek / OpenRouter / Grok / z.ai / mimo sessions live in
 $MARS_DIR/api-sessions/<uuid>.json (default ~/.mars/api-sessions/, with
 ~/.modelmesh/ as a deprecated fallback if it already exists) — full
 message history, replayed on each call.
@@ -473,15 +475,9 @@ _MODEL_CONTEXT_HINT = {
     "glm-4.7-flash": 128_000,
     "glm-4.6": 128_000,
     "glm-4.5": 128_000,
-    # Kimi / Moonshot direct — api.moonshot.ai, api.kimi.com/coding (added 2026-05-23)
-    "kimi-k3": 262_000,  # current flagship (default set 2026-07-18)
-    "kimi-k2.6": 262_000,
-    "kimi-k2.5": 262_000,
-    "kimi-k2": 262_000,
-    "kimi-for-coding": 262_000,
-    "moonshot-v1-128k": 128_000,
-    "moonshot-v1-32k": 32_000,
-    "moonshot-v1-8k": 8_000,
+    # (Kimi / Moonshot direct entries removed 2026-08-01: ask_kimi now
+    # routes through the kimi CLI, which manages its own context; the
+    # moonshotai/* OpenRouter entries above still serve ask_openrouter.)
     # Xiaomi MiMo direct — Singapore plan (added 2026-05-23)
     "mimo-v2.5-pro": 256_000,
     "mimo-v2.5": 256_000,
@@ -1210,76 +1206,149 @@ async def ask_mimo(
     )
 
 
+# ---------------------------------------------------------------------------
+# Kimi Code CLI (kimi) — Moonshot K3 / K2.7 on the Kimi Code subscription
+# ---------------------------------------------------------------------------
+
+# Long or MULTI-LINE prompts go to a disk brief instead of the command
+# line. Two transport limits force this: Windows CreateProcess caps the
+# whole command line at ~32K chars, and the kimi CLI mangles any `-p`
+# argument containing a newline (observed 0.31.1: it drops the prompt
+# and prints its idle greeting — verified with single-line prompts
+# passing and identical multi-line ones failing). Unlike the Codex
+# brief (a model-behavior workaround), this is purely transport, so
+# the length threshold is high. Tunable via KIMI_BRIEF_THRESHOLD.
+KIMI_BRIEF_THRESHOLD = int(os.environ.get("KIMI_BRIEF_THRESHOLD", "20000"))
+
+
+def _parse_kimi_stream(stdout: str) -> tuple[str, Optional[str]]:
+    """Parse `kimi --output-format stream-json` output into (text, session_id).
+
+    Each line is a JSON event, but tool stdout can leak into the stream
+    as plain text (observed 0.31.1: a Bash tool call's output printed
+    raw before its JSON event) — skip anything that doesn't parse as a
+    JSON object. Assistant text arrives in "content" (tool-call events
+    carry none); the session id arrives in a trailing meta event
+    (type "session.resume_hint").
+    """
+    parts: list[str] = []
+    session_id: Optional[str] = None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        role = event.get("role")
+        if role == "assistant":
+            content = event.get("content")
+            if isinstance(content, str) and content.strip():
+                parts.append(content.strip())
+        elif role == "meta" and event.get("session_id"):
+            session_id = str(event["session_id"])
+    return "\n\n".join(parts), session_id
+
+
 @mcp.tool()
 async def ask_kimi(
     prompt: str,
-    model: str = "kimi-k3",
+    model: str = "kimi-code/k3",
     system: Optional[str] = None,
-    max_tokens: int = 100000,
+    cwd: Optional[str] = None,
+    timeout_sec: int = 600,
     session_id: Optional[str] = None,
     ctx: Optional[Context] = None,
 ) -> dict:
-    """Chat completion via Kimi (Moonshot AI), with multi-turn sessions.
+    """Run a prompt through the Kimi Code CLI (`kimi`) as an agentic subagent.
 
-    Continuity: this tool returns a session_id. To continue the same
-    conversation on a follow-up call, you MUST pass that session_id back.
+    Rerouted 2026-08-01: this tool now wraps the local `kimi` CLI
+    (Moonshot's kimi-code, npm) instead of calling the Moonshot HTTPS
+    API. Billing moved from per-token KIMI_API_KEY to the Kimi Code
+    *subscription* (OAuth via `kimi login`; quota refreshes weekly).
+    The CLI runs a full agent loop: it can read/write files and run
+    shell commands in `cwd` (no sandbox — print mode auto-approves
+    tool calls, observed 0.31.1), plus Moonshot web search / fetch.
+
+    Continuity: this tool returns a session_id (kimi's own
+    "session_<uuid>" form, stored under ~/.kimi-code/sessions). To
+    continue the same conversation on a follow-up call, you MUST pass
+    that session_id back. Omitting it starts a fresh session. Legacy
+    API-era kimi sessions (bare UUIDs in ~/.mars/api-sessions/) are
+    NOT resumable here — start fresh.
 
     Args:
-        prompt: User message.
-        model: Kimi model id. Default: "kimi-k3" (Moonshot flagship;
-            set as the default 2026-07-18, superseding kimi-k2.6 — fall
-            back to "kimi-k2.6" if k3 errors on a given call). Served
-            from the Open Platform endpoint https://api.moonshot.ai/v1,
-            billed per token. Other Moonshot ids: "kimi-k2.6",
-            "kimi-k2.5",
-            "moonshot-v1-8k" / "moonshot-v1-32k" / "moonshot-v1-128k".
-            Special: model="kimi-for-coding" routes to the Kimi Code
-            *subscription* endpoint (https://api.kimi.com/coding/v1) and
-            requires KIMI_CODE_API_KEY instead of KIMI_API_KEY.
-            Note: kimi-k2.5/k2.6 only accept temperature=1; MARS never
-            sends a temperature field, so the model's own default applies.
-        system: Optional system prompt (fresh sessions only).
-        max_tokens: Cap on response tokens. Default 100000.
-        session_id: None for fresh session, UUID from prior call to resume.
+        prompt: User message / task description.
+        model: kimi CLI model alias (from ~/.kimi-code/config.toml).
+            Default: "kimi-code/k3" (K3 flagship, 1M context, thinking;
+            continues the K3 default set 2026-07-18). Others:
+              - "kimi-code/k3-256k" — K3 at 262K context
+              - "kimi-code/kimi-for-coding" — K2.7 Coding (the CLI's
+                own default_model)
+              - "kimi-code/kimi-for-coding-highspeed" — K2.7 fast lane
+            Composable with resume (-S + -m verified on 0.31.1).
+        system: Optional system prompt. The CLI has no system-prompt
+            flag, so it is folded into the prompt as a <system>
+            preamble on fresh sessions; ignored on resume.
+        cwd: Workspace directory for the agent loop. Defaults to the
+            MCP server's CWD.
+        timeout_sec: Hard kill after this many seconds. Default 10
+            minutes (K3 thinking at its default high effort can be
+            slow to finish).
+        session_id: None for fresh, or a "session_..." id from a prior
+            call to resume.
 
-    Auth: KIMI_API_KEY (Moonshot Open Platform console) for every model
-    except "kimi-for-coding", which uses KIMI_CODE_API_KEY (Kimi Code
-    Console; tied to a Kimi membership, quota refreshes every 7 days).
+    Auth: the kimi CLI's own OAuth (`kimi login` device-code flow) —
+    KIMI_API_KEY / KIMI_CODE_API_KEY are no longer read. If calls fail
+    with an auth error, re-run `kimi login` in a real terminal.
 
     Returns:
-        {"output": str, "session_id": str}
+        {"output": str, "session_id": str | None}
+        output joins the assistant's text messages (tool-call chatter
+        excluded). Stash session_id; pass it back to continue.
     """
-    if model == "kimi-for-coding":
-        # Dormant route: the Kimi Code *subscription* endpoint. Only usable if
-        # the operator has explicitly provisioned a Kimi Code Console key.
-        # Guarded so it never silently misroutes during normal operation —
-        # the working/default route is Moonshot + kimi-k3 below.
-        kimi_code_key = _optional_env("KIMI_CODE_API_KEY")
-        if not kimi_code_key:
-            raise RuntimeError(
-                "model='kimi-for-coding' targets the Kimi Code subscription "
-                "endpoint, which is NOT configured (KIMI_CODE_API_KEY unset). "
-                "Use the default model 'kimi-k3' (Moonshot Open Platform), "
-                "which is the active route, or set KIMI_CODE_API_KEY first."
+    effective_prompt = prompt
+    if system and session_id is None:
+        effective_prompt = f"<system>\n{system}\n</system>\n\n{prompt}"
+
+    brief_path: Optional[Path] = None
+    if "\n" in effective_prompt or len(effective_prompt) > KIMI_BRIEF_THRESHOLD:
+        brief_path = _write_codex_brief(effective_prompt)
+        effective_prompt = (
+            f"Read the file at {brief_path} — it contains the actual "
+            "user message for this turn. Respond to that message "
+            "directly (emit all outputs INLINE in your reply); do not "
+            "comment on the file-reading step."
+        )
+
+    args = ["kimi"]
+    if session_id:
+        args.extend(["-S", session_id])
+    if model:
+        args.extend(["-m", model])
+    args.extend(["-p", effective_prompt, "--output-format", "stream-json"])
+
+    async with _heartbeat_context(ctx, "kimi", model):
+        try:
+            stdout, _stderr = await _run_subprocess(
+                args, timeout_sec=timeout_sec, cwd=cwd
             )
-        base_url = "https://api.kimi.com/coding/v1"
-        api_key = kimi_code_key
-    else:
-        # Default / active route: Moonshot Open Platform (api.moonshot.ai),
-        # authenticated by KIMI_API_KEY. This is the only configured path.
-        base_url = "https://api.moonshot.ai/v1"
-        api_key = _require_env("KIMI_API_KEY")
-    return await _api_chat_with_session(
-        ctx=ctx,
-        provider="kimi",
-        base_url=base_url,
-        api_key=api_key,
-        model=model,
-        prompt=prompt,
-        system=system,
-        max_tokens=max_tokens,
-        session_id=session_id,
-    )
+        finally:
+            if brief_path is not None:
+                try:
+                    brief_path.unlink()
+                except OSError:
+                    pass
+
+    output, resolved_id = _parse_kimi_stream(stdout)
+    if not output:
+        # Defensive: if the stream had no assistant text (or the format
+        # changes), surface the raw stdout rather than an empty reply.
+        output = stdout.strip()
+    return {"output": output, "session_id": resolved_id or session_id}
 
 
 # ---------------------------------------------------------------------------
@@ -1414,11 +1483,13 @@ async def ask_agy(
 
 @mcp.tool()
 async def list_api_sessions(provider: Optional[str] = None) -> list[dict]:
-    """List stored DeepSeek / OpenRouter / Grok / z.ai / mimo / kimi sessions, newest first.
+    """List stored DeepSeek / OpenRouter / Grok / z.ai / mimo sessions, newest first.
 
     Args:
         provider: Filter to "deepseek", "openrouter", "grok", "zai", "mimo",
-            or "kimi". None returns all.
+            or "kimi" (legacy API-era sessions only — since 2026-08-01
+            ask_kimi routes through the kimi CLI, whose sessions live in
+            ~/.kimi-code and don't appear here). None returns all.
 
     Returns:
         A list of session metadata dicts:
@@ -1451,7 +1522,8 @@ async def list_api_sessions(provider: Optional[str] = None) -> list[dict]:
 
 @mcp.tool()
 async def delete_api_session(session_id: str) -> dict:
-    """Delete a stored DeepSeek / OpenRouter / Grok / z.ai / mimo / kimi session.
+    """Delete a stored DeepSeek / OpenRouter / Grok / z.ai / mimo session
+    (or a legacy API-era kimi session).
 
     Returns:
         {"deleted": bool, "session_id": str, "reason": str | None}
