@@ -42,6 +42,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Subprocess timeouts now kill the whole process tree and report a
+  resumable session id (all CLI-backed seats: kimi, codex, agy).**
+  `_run_subprocess` used plain `proc.kill()` on timeout, which on
+  Windows terminates only the direct child — for npm-installed CLIs
+  that's the `.cmd` shim (cmd.exe), so the node.exe agent loop
+  survived as an orphan that kept running after MARS reported
+  "subagent timed out" (observed 2026-08-01: two timed-out `ask_kimi`
+  calls with `timeout_sec=1500` kept writing files for 21 and 44 more
+  minutes, racing a follow-up session in the same directory). Timeouts
+  now kill the full tree: `taskkill /T /F` on Windows, process-group
+  kill (`start_new_session` + `killpg`) on POSIX; the agy ConPTY
+  helper's internal timeout path got the same treatment
+  (`PtyProcess.terminate` shares the direct-child-only flaw).
+  Additionally, a timed-out call used to return no session id, so the
+  interrupted run couldn't be resumed. `_run_subprocess` now streams
+  stdout/stderr into buffers as the child runs and raises
+  `SubprocessTimeout` carrying the partial output; each CLI seat then
+  recovers the id — codex from the partial output (it prints the
+  thread id early), kimi from the CLI session store
+  (`~/.kimi-code/sessions/wd_*/session_*`, newest dir touched since
+  launch, scoped to the call's cwd), agy from its cwd→conversation
+  cache — and embeds it in the timeout error message with a hint to
+  pass it back as `session_id` and resume. Regression tests in
+  `tests/test_timeout_kill.py` drive fake long-running CLIs (installed
+  as real `.cmd` shims that spawn grandchildren, mirroring the
+  npm-shim tree) and assert the whole tree dies and the session id
+  surfaces; run with `pytest` (new `dev` dependency group).
+- **Pinned `mcp<2`.** mcp 2.0.0 removed the `mcp.server.fastmcp`
+  module this server is built on, so a fresh install resolving
+  `mcp>=1.2.0` to 2.x failed on import (verified 2026-08-01). Both
+  `pyproject.toml` and the PEP 723 inline metadata now cap at `<2`.
 - **`pyproject.toml` was missing two runtime dependencies that the
   PEP 723 inline metadata at the top of `server.py` already declared.**
   `pyjwt>=2.0.0` (needed by `ask_zai`'s JWT signing) and

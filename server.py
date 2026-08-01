@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#   "mcp>=1.2.0",
+#   "mcp>=1.2.0,<2",
 #   "httpx>=0.27.0",
 #   "pyjwt>=2.0.0",
 #   "pywinpty==2.0.14; sys_platform == 'win32'",
@@ -77,6 +77,8 @@ import json
 import os
 import re
 import shutil
+import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -96,20 +98,89 @@ mcp = FastMCP("mars")
 # Subprocess runner
 # ---------------------------------------------------------------------------
 
+class SubprocessTimeout(RuntimeError):
+    """A CLI subagent exceeded its timeout and its process tree was killed.
+
+    Carries whatever the child wrote before the kill so tool wrappers can
+    salvage a session id for the caller to resume with.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        partial_stdout: str = "",
+        partial_stderr: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.partial_stdout = partial_stdout
+        self.partial_stderr = partial_stderr
+
+
+def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+    """Kill a subprocess and every descendant it spawned.
+
+    Plain Process.kill() terminates only the direct child. The CLIs we
+    wrap are npm `.cmd` shims (kimi/codex: cmd.exe -> node.exe -> ...) or
+    helper scripts that spawn their own children, so kill() left the
+    actual agent loop running as an orphan that kept editing files long
+    after we reported a timeout (observed with ask_kimi 2026-08-01: two
+    timed-out calls kept writing for 21 and 44 more minutes). On Windows
+    `taskkill /T /F` walks the child tree; on POSIX the child is its own
+    session leader (start_new_session below) so killpg reaches the group.
+    """
+    if proc.returncode is not None:
+        return
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+            capture_output=True,
+        )
+    else:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    # Backstop for taskkill/killpg failure modes (already-exited race,
+    # access denied): at minimum take down the direct child.
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        proc.kill()
+
+
+def _timeout_message(
+    base: str, provider: str, session_id: Optional[str]
+) -> str:
+    """Timeout error text carrying the recovered session id (when there is
+    one) so the caller can resume the interrupted work instead of
+    restarting it from scratch."""
+    if session_id:
+        return (
+            f"{base} Recovered session_id: {session_id} — the {provider} "
+            f"session survived on disk; pass it back as session_id on the "
+            f"next call to resume instead of restarting."
+        )
+    return (
+        f"{base} No session_id could be recovered for the {provider} run; "
+        f"a follow-up call must start fresh."
+    )
+
+
 async def _run_subprocess(
     args: list[str],
     timeout_sec: int,
     cwd: Optional[str] = None,
     stdin_data: Optional[str] = None,
 ) -> tuple[str, str]:
-    """Run a command, return (stdout, stderr). Raises on non-zero exit."""
+    """Run a command, return (stdout, stderr). Raises on non-zero exit.
+
+    On timeout, kills the entire process tree (not just the direct child)
+    and raises SubprocessTimeout carrying the partial stdout/stderr
+    captured before the kill.
+    """
     resolved = shutil.which(args[0])
     if resolved is None:
         raise RuntimeError(
             f"`{args[0]}` not found on PATH. Install it and re-run."
         )
     # On Windows, asyncio.create_subprocess_exec doesn't follow PATHEXT,
-    # so npm-installed `.cmd` shims (codex, gemini) fail unless we pass
+    # so npm-installed `.cmd` shims (codex, kimi) fail unless we pass
     # the fully-resolved path here.
     args = [resolved, *args[1:]]
 
@@ -123,26 +194,81 @@ async def _run_subprocess(
         if stdin_data is not None
         else asyncio.subprocess.DEVNULL
     )
+    spawn_kwargs: dict = {}
+    if sys.platform != "win32":
+        # Own session => own process group, so _kill_process_tree can
+        # killpg the whole tree instead of just the direct child.
+        spawn_kwargs["start_new_session"] = True
     proc = await asyncio.create_subprocess_exec(
         *args,
         stdin=stdin_arg,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=cwd,
+        **spawn_kwargs,
     )
 
-    try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(stdin_data.encode() if stdin_data else None),
-            timeout=timeout_sec,
-        )
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise RuntimeError(f"subagent timed out after {timeout_sec}s")
+    # Drain stdout/stderr into buffers as the child runs (instead of
+    # proc.communicate) so a timeout still has the partial output — the
+    # only place a killed run's session id can be recovered from.
+    stdout_buf = bytearray()
+    stderr_buf = bytearray()
 
-    out = stdout.decode("utf-8", errors="replace")
-    err = stderr.decode("utf-8", errors="replace")
+    async def _drain(stream: asyncio.StreamReader, buf: bytearray) -> None:
+        while chunk := await stream.read(65536):
+            buf.extend(chunk)
+
+    io_tasks = [
+        asyncio.create_task(_drain(proc.stdout, stdout_buf)),
+        asyncio.create_task(_drain(proc.stderr, stderr_buf)),
+    ]
+    if stdin_data is not None:
+
+        async def _feed_stdin() -> None:
+            try:
+                proc.stdin.write(stdin_data.encode())
+                await proc.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                with contextlib.suppress(Exception):
+                    proc.stdin.close()
+
+        io_tasks.append(asyncio.create_task(_feed_stdin()))
+
+    async def _settle_io(grace_sec: float) -> None:
+        """Await IO tasks up to grace_sec, then cancel stragglers. The
+        readers end at pipe EOF, which only arrives once every
+        handle-holder in the child tree is gone — don't hang on a
+        detached grandchild that inherited the pipes."""
+        done, pending = await asyncio.wait(io_tasks, timeout=grace_sec)
+        for t in done:
+            with contextlib.suppress(Exception):
+                t.exception()
+        for t in pending:
+            t.cancel()
+        for t in pending:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await t
+
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=timeout_sec)
+    except asyncio.TimeoutError:
+        _kill_process_tree(proc)
+        await proc.wait()
+        # Give the readers a beat to flush what the tree wrote pre-kill.
+        await _settle_io(grace_sec=2.0)
+        raise SubprocessTimeout(
+            f"subagent timed out after {timeout_sec}s; "
+            f"killed the whole process tree.",
+            partial_stdout=stdout_buf.decode("utf-8", errors="replace"),
+            partial_stderr=stderr_buf.decode("utf-8", errors="replace"),
+        )
+
+    await _settle_io(grace_sec=5.0)
+
+    out = stdout_buf.decode("utf-8", errors="replace")
+    err = stderr_buf.decode("utf-8", errors="replace")
 
     if proc.returncode != 0:
         tail = err.strip() or out.strip() or "(no output)"
@@ -761,7 +887,10 @@ async def ask_codex(
               - any other model id your Codex CLI auth has access to
         cwd: Working directory for Codex. Defaults to the MCP server's CWD.
         sandbox: One of "read-only", "workspace-write", "danger-full-access".
-        timeout_sec: Hard kill after this many seconds. Default 10 minutes.
+        timeout_sec: Hard kill (whole process tree) after this many
+            seconds. Default 10 minutes. The timeout error includes a
+            recovered session_id when one is available — pass it back
+            to resume the interrupted session instead of restarting.
         session_id: Conversation continuity.
             - None: start a fresh session. The new UUID is returned.
             - "last": resume the most recent Codex session.
@@ -807,6 +936,17 @@ async def ask_codex(
     async with _heartbeat_context(ctx, "codex", model):
         try:
             stdout, stderr = await _run_subprocess(args, timeout_sec=timeout_sec)
+        except SubprocessTimeout as e:
+            # Codex prints its session/thread id near the start of the
+            # run, so the partial output usually has it even on a kill.
+            timeout_id = _extract_codex_session_id(
+                e.partial_stdout, e.partial_stderr
+            )
+            if timeout_id is None and session_id and session_id != "last":
+                timeout_id = session_id
+            raise RuntimeError(
+                _timeout_message(str(e), "codex", timeout_id)
+            ) from None
         finally:
             # Best-effort cleanup of the brief file regardless of success/error.
             if brief_path is not None:
@@ -1220,6 +1360,50 @@ async def ask_mimo(
 # the length threshold is high. Tunable via KIMI_BRIEF_THRESHOLD.
 KIMI_BRIEF_THRESHOLD = int(os.environ.get("KIMI_BRIEF_THRESHOLD", "20000"))
 
+# The kimi CLI's own session store: sessions/wd_<dirname>_<hash>/session_<uuid>/
+_KIMI_SESSIONS_DIR = Path.home() / ".kimi-code" / "sessions"
+
+
+def _kimi_newest_session_since(
+    start_ts: float, cwd: Optional[str]
+) -> Optional[str]:
+    """Recover the session id of a killed kimi run from the CLI's store.
+
+    The stream-json resume hint is a trailing meta event, so a timed-out
+    run usually dies before emitting it. The CLI does create its session
+    directory (sessions/wd_<dirname>_<hash>/session_<uuid>/) at startup
+    though, so the newest session dir touched after we launched
+    identifies the orphan. Scoped to the cwd's workdir bucket when one
+    matches, to dodge concurrent sessions in other directories.
+    """
+    try:
+        wd_dirs = [d for d in _KIMI_SESSIONS_DIR.iterdir() if d.is_dir()]
+    except OSError:
+        return None
+    slug = Path(cwd or os.getcwd()).name.lower()
+    scoped = [d for d in wd_dirs if d.name.lower().startswith(f"wd_{slug}_")]
+    if scoped:
+        wd_dirs = scoped
+    best: Optional[str] = None
+    # Slack for coarse filesystem timestamps: the session dir appears
+    # moments after our start timestamp.
+    best_mtime = start_ts - 2.0
+    for wd in wd_dirs:
+        try:
+            entries = list(wd.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.name.startswith("session_"):
+                continue
+            try:
+                mtime = entry.stat().st_mtime
+            except OSError:
+                continue
+            if mtime >= best_mtime:
+                best, best_mtime = entry.name, mtime
+    return best
+
 
 def _parse_kimi_stream(stdout: str) -> tuple[str, Optional[str]]:
     """Parse `kimi --output-format stream-json` output into (text, session_id).
@@ -1295,9 +1479,11 @@ async def ask_kimi(
             preamble on fresh sessions; ignored on resume.
         cwd: Workspace directory for the agent loop. Defaults to the
             MCP server's CWD.
-        timeout_sec: Hard kill after this many seconds. Default 10
-            minutes (K3 thinking at its default high effort can be
-            slow to finish).
+        timeout_sec: Hard kill (whole process tree) after this many
+            seconds. Default 10 minutes (K3 thinking at its default
+            high effort can be slow to finish). The timeout error
+            includes a recovered session_id when one is available —
+            pass it back to resume instead of restarting.
         session_id: None for fresh, or a "session_..." id from a prior
             call to resume.
 
@@ -1331,11 +1517,25 @@ async def ask_kimi(
         args.extend(["-m", model])
     args.extend(["-p", effective_prompt, "--output-format", "stream-json"])
 
+    start_ts = time.time()
     async with _heartbeat_context(ctx, "kimi", model):
         try:
             stdout, _stderr = await _run_subprocess(
                 args, timeout_sec=timeout_sec, cwd=cwd
             )
+        except SubprocessTimeout as e:
+            # On resume the id is already known; otherwise try the
+            # partial stream (rarely has the trailing resume hint), then
+            # the CLI's session store on disk.
+            _partial_text, stream_id = _parse_kimi_stream(e.partial_stdout)
+            timeout_id = (
+                session_id
+                or stream_id
+                or _kimi_newest_session_since(start_ts, cwd)
+            )
+            raise RuntimeError(
+                _timeout_message(str(e), "kimi", timeout_id)
+            ) from None
         finally:
             if brief_path is not None:
                 try:
@@ -1444,8 +1644,11 @@ async def ask_agy(
             Must be a trusted workspace (agy settings.json
             trustedWorkspaces), otherwise agy hangs on an interactive
             trust prompt until timeout.
-        timeout_sec: Hard kill after this many seconds. Default 10 minutes
-            (thinking models can be slow to first token).
+        timeout_sec: Hard kill (whole process tree) after this many
+            seconds. Default 10 minutes (thinking models can be slow to
+            first token). The timeout error includes a recovered
+            conversation id when one is available — pass it back as
+            session_id to resume instead of restarting.
         session_id: None for a fresh conversation, or a conversation UUID
             from a previous call to resume it.
 
@@ -1466,8 +1669,25 @@ async def ask_agy(
 
     effective_cwd = str(Path(cwd or os.getcwd()).resolve())
     start_ts = time.time()
-    async with _heartbeat_context(ctx, "agy", model):
-        output = await _agy_pty_run(args, timeout_sec, effective_cwd)
+    try:
+        async with _heartbeat_context(ctx, "agy", model):
+            output = await _agy_pty_run(args, timeout_sec, effective_cwd)
+    except RuntimeError as e:
+        # Timeouts arrive two ways: SubprocessTimeout from the outer
+        # wrapper (helper itself hung), or the helper's own exit-3
+        # "agy timed out after Ns" surfaced as a nonzero-exit error.
+        # Either way agy's conversation db was created at startup, so
+        # the id is recoverable for a resume.
+        if not (isinstance(e, SubprocessTimeout) or "timed out" in str(e)):
+            raise
+        timeout_id = (
+            session_id
+            or _agy_conversation_for_cwd(effective_cwd)
+            or _agy_newest_conversation_since(start_ts)
+        )
+        raise RuntimeError(
+            _timeout_message(str(e), "agy", timeout_id)
+        ) from None
 
     resolved_id = (
         session_id

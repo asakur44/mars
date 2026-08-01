@@ -17,6 +17,7 @@ this machine (verified 2026-06-10).
 
 import json
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -57,6 +58,18 @@ def main() -> int:
     while time.time() < deadline and proc.isalive():
         time.sleep(0.25)
     timed_out = proc.isalive()
+    if timed_out:
+        # PtyProcess.terminate only reaches the direct child; agy's node
+        # descendants keep running the agent loop as orphans (same bug as
+        # the server's _run_subprocess pre-2026-08-01 — see
+        # _kill_process_tree there). taskkill /T walks the whole tree.
+        try:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                capture_output=True,
+            )
+        except Exception:
+            pass
     try:
         proc.terminate(force=True)
     except Exception:

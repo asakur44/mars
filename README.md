@@ -361,6 +361,12 @@ The inline-emit instruction also closes a related Codex sandbox quirk: even at `
 
 Heartbeats keep the parent watchdog alive but don't help if the inner httpx call itself times out at 3 minutes before the model finishes. `_openai_compatible_chat`'s default `timeout_sec` is now `900` (15 min) — fits the typical 5–15 min thinking-mode envelope.
 
+### Timeouts kill the whole CLI process tree and report a resumable session id
+
+For the CLI-backed seats (`ask_kimi`, `ask_codex`, `ask_agy`), hitting `timeout_sec` now kills the **entire process tree** — `taskkill /T /F` on Windows, process-group kill on POSIX — not just the direct child. Previously the direct child was an npm `.cmd` shim, so the actual node.exe agent loop survived the kill and kept editing files as an orphan (observed 2026-08-01: two timed-out `ask_kimi` calls kept writing for 21 and 44 more minutes, racing a follow-up session in the same directory).
+
+The timeout error also now carries a recovered `session_id` when one exists — parsed from partial CLI output, the kimi session store (`~/.kimi-code/sessions`), or agy's conversation cache — so the caller can resume the interrupted session instead of restarting from scratch. Note the "Late-write recovery" pattern below no longer applies to CLI seats: after a timeout the process is dead, so resume the reported session id instead of waiting for a late write.
+
 ### Per-model output budget
 
 Beyond watchdog and timeout, each provider has its own *output ceiling* — a practical limit on visible tokens per single call beyond which the gateway truncates, returns 504, or silently drops content. These ceilings shift with provider load and aren't always stable, so MARS doesn't enforce them; instead they live as discoverable hints in `_MODEL_PRACTICAL_OUTPUT_CEILING` (in `server.py`).
