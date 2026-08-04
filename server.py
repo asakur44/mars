@@ -575,7 +575,8 @@ _MODEL_CONTEXT_HINT = {
     "moonshotai/kimi-k2.5": 262_000,
     "moonshotai/kimi-latest": 262_000,
     # xAI Grok direct
-    "grok-4.3": 1_000_000,  # current flagship (added 2026-06-13)
+    "grok-4.5": 1_000_000,  # current flagship (default set 2026-08-04); conservative pending xAI docs
+    "grok-4.3": 1_000_000,  # prior flagship (added 2026-06-13)
     "grok-4-1-fast": 2_000_000,
     "grok-4-1-fast-latest": 2_000_000,
     "grok-4-1-fast-reasoning": 2_000_000,
@@ -660,6 +661,7 @@ _MODEL_PRACTICAL_OUTPUT_CEILING = {
     # xAI Grok — flagship reasoning empirically holds bulk-fanout
     # cleanly (5–15 min calls observed clean per chairman's runs).
     # Cheaper variants are similar shape but smaller context.
+    "grok-4.5": 60_000,   # mirrors grok-4.3 pending bulk-fanout evidence
     "grok-4.3": 60_000,
     "grok-4.20-reasoning": 60_000,
     "grok-4.20-0309-reasoning": 60_000,
@@ -1118,7 +1120,7 @@ async def ask_deepseek(
 @mcp.tool()
 async def ask_grok(
     prompt: str,
-    model: str = "grok-4.3",
+    model: str = "grok-4.5",
     system: Optional[str] = None,
     max_tokens: int = 100000,
     session_id: Optional[str] = None,
@@ -1133,11 +1135,15 @@ async def ask_grok(
 
     Args:
         prompt: User message.
-        model: xAI model id. Default: "grok-4.3" (xAI flagship; leads
-            on non-hallucination rate, agentic tool-calling, and
-            instruction following; 1M context; $1.25/$2.50 per M
-            tokens in/out, $0.20/M cached input, at 2026-06-13).
+        model: xAI model id. Default: "grok-4.5" (xAI flagship; default
+            bumped 2026-08-04 from grok-4.3 — fall back to "grok-4.3"
+            if 4.5 errors on a given call).
             Other choices:
+              - "grok-4.3" — prior flagship (2026-06-13; leads on
+                non-hallucination rate, agentic tool-calling, and
+                instruction following; 1M context; $1.25/$2.50 per M
+                tokens in/out, $0.20/M cached input); the fallback
+                when grok-4.5 errors
               - "grok-4.20-reasoning" — prior flagship reasoning variant
               - "grok-4.20-0309-reasoning" — date-stamped reasoning variant
               - "grok-4.20-0309-non-reasoning" — faster, lower latency
@@ -1302,7 +1308,9 @@ async def ask_mimo(
     """Chat completion via the Xiaomi MiMo API, with multi-turn sessions.
 
     Continuity: this tool returns a session_id. To continue the same
-    conversation on a follow-up call, you MUST pass that session_id back.
+    conversation on a follow-up call, you MUST pass that session_id
+    back. Omitting it starts a fresh chat that has no memory of prior
+    turns. Only start fresh when the work is unrelated.
 
     Args:
         prompt: User message.
@@ -1456,6 +1464,9 @@ async def ask_kimi(
     The CLI runs a full agent loop: it can read/write files and run
     shell commands in `cwd` (no sandbox — print mode auto-approves
     tool calls, observed 0.31.1), plus Moonshot web search / fetch.
+    Prefer this over Kimi-via-ask_openrouter for repo-aware work.
+    Note there is no max_tokens parameter (the CLI has no equivalent);
+    output length is governed by the model itself.
 
     Continuity: this tool returns a session_id (kimi's own
     "session_<uuid>" form, stored under ~/.kimi-code/sessions). To

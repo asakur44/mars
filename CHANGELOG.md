@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`ask_grok` default model bumped to `grok-4.5`** (from
+  `grok-4.3`, which stays available as the documented fallback when
+  4.5 errors on a given call). Context-hint and practical-output
+  tables gained `grok-4.5` entries mirroring 4.3 pending xAI docs.
+  Alongside it, the tool docstrings now carry the full usage contract
+  that previously lived in the operator's client-side notes: the
+  session-continuity rule is spelled out on every `ask_*` tool
+  (`ask_mimo` had an abbreviated form), and `ask_kimi` notes the
+  absence of a `max_tokens` parameter and that it's preferred over
+  Kimi-via-`ask_openrouter` for repo-aware work — per the practice of
+  putting tool guidance in tool descriptions rather than host-side
+  prompt files.
+
 - **`ask_kimi` rerouted from the Moonshot HTTPS API to the local
   `kimi` Kimi Code CLI** (`@moonshot-ai/kimi-code`, verified on
   0.31.1). Billing moves from per-token `KIMI_API_KEY`
